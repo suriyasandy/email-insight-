@@ -1,0 +1,518 @@
+"""
+Enhanced ML-based Entity Extractor with Feedback Learning
+Combines spaCy NER with rule-based patterns and user feedback learning
+"""
+
+import spacy
+import re
+import json
+from typing import List, Dict, Any, Tuple, Optional
+from pathlib import Path
+from collections import defaultdict, Counter
+import pickle
+from datetime import datetime
+import hashlib
+
+class MLEntityExtractor:
+    """ML-enhanced entity extractor with feedback learning"""
+    
+    def __init__(self):
+        self.spacy_model = None
+        self.rule_patterns = self._load_patterns()
+        self.gazetteers = self._load_gazetteers()
+        self.feedback_db = self._load_feedback_db()
+        self.learned_patterns = self._load_learned_patterns()
+        self.confidence_threshold = 0.5
+        self._init_spacy_model()
+    
+    def _init_spacy_model(self):
+        """Initialize spaCy model for NER"""
+        try:
+            self.spacy_model = spacy.load("en_core_web_sm")
+            print("✅ spaCy model loaded successfully")
+        except OSError:
+            print("⚠️ spaCy model not found, using rule-based extraction only")
+            self.spacy_model = None
+    
+    def _load_patterns(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Load extraction patterns from configuration"""
+        try:
+            with open('config/trade_patterns.json', 'r') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return self._get_default_patterns()
+    
+    def _load_gazetteers(self) -> Dict[str, List[str]]:
+        """Load gazetteers from configuration"""
+        try:
+            with open('config/gazetteers.json', 'r') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
+    
+    def _load_feedback_db(self) -> Dict[str, Any]:
+        """Load feedback database for learning"""
+        try:
+            with open('data/feedback_learning.json', 'r') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {
+                'user_corrections': [],
+                'learned_entities': {},
+                'pattern_performance': {},
+                'entity_contexts': defaultdict(list)
+            }
+    
+    def _save_feedback_db(self):
+        """Save feedback database"""
+        # Ensure data directory exists
+        Path('data').mkdir(exist_ok=True)
+        
+        # Convert defaultdict to regular dict for JSON serialization
+        feedback_data = dict(self.feedback_db)
+        feedback_data['entity_contexts'] = dict(feedback_data['entity_contexts'])
+        
+        # Convert datetime objects to strings
+        feedback_data = self._convert_datetime_to_str(feedback_data)
+        
+        with open('data/feedback_learning.json', 'w') as f:
+            json.dump(feedback_data, f, indent=2)
+    
+    def _load_learned_patterns(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Load patterns learned from user feedback"""
+        try:
+            with open('data/learned_patterns.json', 'r') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
+    
+    def _save_learned_patterns(self):
+        """Save learned patterns"""
+        Path('data').mkdir(exist_ok=True)
+        # Convert datetime objects to strings
+        patterns_data = self._convert_datetime_to_str(self.learned_patterns)
+        with open('data/learned_patterns.json', 'w') as f:
+            json.dump(patterns_data, f, indent=2)
+    
+    def extract_entities(self, text: str, source_metadata: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """
+        Extract entities using hybrid approach: spaCy + rules + learned patterns
+        """
+        if not text:
+            return []
+        
+        all_entities = []
+        
+        # Method 1: spaCy NER (if available)
+        if self.spacy_model:
+            spacy_entities = self._extract_spacy_entities(text)
+            all_entities.extend(spacy_entities)
+        
+        # Method 2: Rule-based extraction
+        rule_entities = self._extract_rule_based(text)
+        all_entities.extend(rule_entities)
+        
+        # Method 3: Learned patterns from feedback
+        learned_entities = self._extract_learned_patterns(text)
+        all_entities.extend(learned_entities)
+        
+        # Method 4: Gazetteer matching
+        gazetteer_entities = self._extract_gazetteer_entities(text)
+        all_entities.extend(gazetteer_entities)
+        
+        # Post-process and deduplicate
+        processed_entities = self._post_process_entities(all_entities, text)
+        
+        # Add source metadata
+        for entity in processed_entities:
+            entity['source_metadata'] = source_metadata or {}
+            entity['extraction_timestamp'] = datetime.now().isoformat()
+        
+        return processed_entities
+    
+    def _extract_spacy_entities(self, text: str) -> List[Dict[str, Any]]:
+        """Extract entities using spaCy NER"""
+        entities = []
+        doc = self.spacy_model(text)
+        
+        # Financial entity mapping for spaCy labels
+        financial_mapping = {
+            'MONEY': 'amount',
+            'ORG': 'counterparty', 
+            'PERSON': 'trader',
+            'DATE': 'date',
+            'TIME': 'date',
+            'PERCENT': 'risk_metric',
+            'CARDINAL': 'amount'
+        }
+        
+        for ent in doc.ents:
+            entity_type = financial_mapping.get(ent.label_, ent.label_.lower())
+            
+            # Higher confidence for financial entities
+            confidence = 0.8 if entity_type in financial_mapping.values() else 0.6
+            
+            entity = {
+                'entity_type': entity_type,
+                'value': ent.text.strip(),
+                'position': ent.start_char,
+                'end_position': ent.end_char,
+                'confidence': confidence,
+                'extraction_method': 'spacy_ner',
+                'spacy_label': ent.label_,
+                'context': self._extract_context(text, ent.start_char, ent.end_char)
+            }
+            entities.append(entity)
+        
+        return entities
+    
+    def _extract_rule_based(self, text: str) -> List[Dict[str, Any]]:
+        """Extract entities using rule-based patterns"""
+        entities = []
+        
+        for entity_type, patterns in self.rule_patterns.items():
+            for pattern_config in patterns:
+                pattern = pattern_config['pattern']
+                group = pattern_config.get('group', 0)
+                confidence = pattern_config.get('confidence', 0.5)
+                
+                try:
+                    flags = 0
+                    if 'IGNORECASE' in pattern_config.get('flags', ''):
+                        flags |= re.IGNORECASE
+                    
+                    matches = re.finditer(pattern, text, flags)
+                    
+                    for match in matches:
+                        try:
+                            value = match.group(group).strip()
+                            start_pos = match.start(group) if group > 0 else match.start()
+                            end_pos = match.end(group) if group > 0 else match.end()
+                            
+                            if value and len(value) > 1:
+                                entity = {
+                                    'entity_type': entity_type,
+                                    'value': value,
+                                    'position': start_pos,
+                                    'end_position': end_pos,
+                                    'confidence': confidence,
+                                    'extraction_method': 'rule_based',
+                                    'pattern_used': pattern,
+                                    'context': self._extract_context(text, start_pos, end_pos)
+                                }
+                                entities.append(entity)
+                        except (IndexError, AttributeError):
+                            continue
+                except re.error:
+                    continue
+        
+        return entities
+    
+    def _extract_learned_patterns(self, text: str) -> List[Dict[str, Any]]:
+        """Extract entities using patterns learned from user feedback"""
+        entities = []
+        
+        for entity_type, patterns in self.learned_patterns.items():
+            for pattern_info in patterns:
+                pattern = pattern_info['pattern']
+                confidence = pattern_info.get('confidence', 0.7)
+                
+                try:
+                    matches = re.finditer(pattern, text, re.IGNORECASE)
+                    
+                    for match in matches:
+                        entity = {
+                            'entity_type': entity_type,
+                            'value': match.group(1) if match.groups() else match.group(0),
+                            'position': match.start(),
+                            'end_position': match.end(),
+                            'confidence': confidence,
+                            'extraction_method': 'learned_pattern',
+                            'pattern_used': pattern,
+                            'context': self._extract_context(text, match.start(), match.end()),
+                            'learned_from_feedback': True
+                        }
+                        entities.append(entity)
+                except re.error:
+                    continue
+        
+        return entities
+    
+    def _extract_gazetteer_entities(self, text: str) -> List[Dict[str, Any]]:
+        """Extract entities using gazetteer matching"""
+        entities = []
+        
+        type_mapping = {
+            'currencies': 'currency',
+            'financial_institutions': 'counterparty',
+            'products': 'product',
+            'risk_measures': 'risk_metric',
+            'exception_types': 'exception_type'
+        }
+        
+        for gazetteer_name, terms in self.gazetteers.items():
+            entity_type = type_mapping.get(gazetteer_name, gazetteer_name)
+            
+            for term in terms:
+                pattern = r'\b' + re.escape(term) + r'\b'
+                matches = re.finditer(pattern, text, re.IGNORECASE)
+                
+                for match in matches:
+                    entity = {
+                        'entity_type': entity_type,
+                        'value': match.group(),
+                        'position': match.start(),
+                        'end_position': match.end(),
+                        'confidence': 0.8,
+                        'extraction_method': 'gazetteer',
+                        'gazetteer_source': gazetteer_name,
+                        'context': self._extract_context(text, match.start(), match.end())
+                    }
+                    entities.append(entity)
+        
+        return entities
+    
+    def _post_process_entities(self, entities: List[Dict[str, Any]], text: str) -> List[Dict[str, Any]]:
+        """Post-process entities to remove duplicates and improve quality"""
+        if not entities:
+            return []
+        
+        # Sort by position
+        sorted_entities = sorted(entities, key=lambda x: x['position'])
+        
+        # Group overlapping entities
+        grouped_entities = self._group_overlapping_entities(sorted_entities)
+        
+        # Select best entity from each group
+        final_entities = []
+        for group in grouped_entities:
+            best_entity = self._select_best_entity(group)
+            if best_entity['confidence'] >= self.confidence_threshold:
+                final_entities.append(best_entity)
+        
+        return final_entities
+    
+    def _group_overlapping_entities(self, entities: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+        """Group overlapping entities"""
+        if not entities:
+            return []
+        
+        groups = []
+        current_group = [entities[0]]
+        
+        for entity in entities[1:]:
+            last_entity = current_group[-1]
+            
+            # Check for overlap
+            if (entity['position'] <= last_entity['end_position'] and
+                entity['end_position'] >= last_entity['position']):
+                current_group.append(entity)
+            else:
+                groups.append(current_group)
+                current_group = [entity]
+        
+        groups.append(current_group)
+        return groups
+    
+    def _select_best_entity(self, entities: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Select the best entity from a group of overlapping entities"""
+        if len(entities) == 1:
+            return entities[0]
+        
+        # Prioritize by method and confidence
+        method_priority = {
+            'learned_pattern': 4,
+            'spacy_ner': 3,
+            'rule_based': 2,
+            'gazetteer': 1
+        }
+        
+        def entity_score(entity):
+            method_score = method_priority.get(entity['extraction_method'], 0)
+            return (method_score, entity['confidence'])
+        
+        best_entity = max(entities, key=entity_score)
+        
+        # Merge extraction methods for transparency
+        methods = list(set(e['extraction_method'] for e in entities))
+        best_entity['all_extraction_methods'] = methods
+        
+        return best_entity
+    
+    def _extract_context(self, text: str, start_pos: int, end_pos: int, window_size: int = 50) -> str:
+        """Extract context around an entity"""
+        context_start = max(0, start_pos - window_size)
+        context_end = min(len(text), end_pos + window_size)
+        
+        context = text[context_start:context_end].strip()
+        
+        if context_start > 0:
+            context = "..." + context
+        if context_end < len(text):
+            context = context + "..."
+        
+        return context
+    
+    def learn_from_feedback(self, original_entities: List[Dict[str, Any]], 
+                           corrected_entities: List[Dict[str, Any]], 
+                           text: str, user_id: str = "system") -> Dict[str, Any]:
+        """Learn from user corrections to improve future extractions"""
+        
+        learning_result = {
+            'patterns_generated': 0,
+            'entities_learned': 0,
+            'feedback_recorded': True
+        }
+        
+        # Record the feedback
+        feedback_record = {
+            'timestamp': datetime.now().isoformat(),
+            'user_id': user_id,
+            'text': text,
+            'original_entities': original_entities,
+            'corrected_entities': corrected_entities
+        }
+        
+        self.feedback_db['user_corrections'].append(feedback_record)
+        
+        # Learn new patterns from corrections
+        for corrected_entity in corrected_entities:
+            entity_type = corrected_entity.get('entity_type')
+            entity_value = corrected_entity.get('value')
+            
+            if entity_type and entity_value:
+                # Generate regex pattern for this entity
+                generated_pattern = self._generate_pattern_from_entity(entity_value, text)
+                
+                if generated_pattern:
+                    # Add to learned patterns
+                    if entity_type not in self.learned_patterns:
+                        self.learned_patterns[entity_type] = []
+                    
+                    pattern_info = {
+                        'pattern': generated_pattern,
+                        'confidence': 0.8,
+                        'learned_from': entity_value,
+                        'context': corrected_entity.get('context', ''),
+                        'timestamp': datetime.now().isoformat(),
+                        'user_id': user_id
+                    }
+                    
+                    # Check if pattern already exists
+                    existing_patterns = [p['pattern'] for p in self.learned_patterns[entity_type]]
+                    if generated_pattern not in existing_patterns:
+                        self.learned_patterns[entity_type].append(pattern_info)
+                        learning_result['patterns_generated'] += 1
+                
+                # Store entity context for future learning
+                context_key = f"{entity_type}:{entity_value}"
+                self.feedback_db['entity_contexts'][context_key].append({
+                    'context': corrected_entity.get('context', ''),
+                    'full_text': text,
+                    'timestamp': datetime.now().isoformat()
+                })
+                
+                learning_result['entities_learned'] += 1
+        
+        # Save learned patterns and feedback
+        self._save_learned_patterns()
+        self._save_feedback_db()
+        
+        return learning_result
+    
+    def _convert_datetime_to_str(self, obj):
+        """Recursively convert datetime objects to strings for JSON serialization"""
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        elif isinstance(obj, dict):
+            return {key: self._convert_datetime_to_str(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_datetime_to_str(item) for item in obj]
+        else:
+            return obj
+    
+    def _generate_pattern_from_entity(self, entity_value: str, context_text: str) -> Optional[str]:
+        """Generate regex pattern from entity value and context"""
+        
+        # Find the entity in the context
+        entity_pos = context_text.find(entity_value)
+        if entity_pos == -1:
+            return None
+        
+        # Analyze the entity value to create appropriate pattern
+        patterns = []
+        
+        # Pattern for alphanumeric IDs (like trade IDs)
+        if re.match(r'^[A-Z]{2,4}\d{6,12}$', entity_value):
+            alpha_count = len(re.findall(r"[A-Z]", entity_value))
+            digit_count = len(re.findall(r"\d", entity_value))
+            patterns.append(rf'\b([A-Z]{{{alpha_count}}}\d{{{digit_count}}})\b')
+        
+        # Pattern for amounts with currencies
+        if re.match(r'^\d+[.,]?\d*$', entity_value.replace(',', '')):
+            patterns.append(r'\b([\d,]+\.?\d*)\b')
+        
+        # Pattern for currency codes
+        if re.match(r'^[A-Z]{3}$', entity_value):
+            escaped_value = re.escape(entity_value)
+            patterns.append(rf'\b({escaped_value})\b')
+        
+        # Generic pattern with word boundaries
+        escaped_value = re.escape(entity_value)
+        patterns.append(rf'\b({escaped_value})\b')
+        
+        # Return the most specific pattern
+        return patterns[0] if patterns else None
+    
+    def get_learning_statistics(self) -> Dict[str, Any]:
+        """Get statistics about the learning system"""
+        stats = {
+            'total_corrections': len(self.feedback_db.get('user_corrections', [])),
+            'learned_patterns_count': sum(len(patterns) for patterns in self.learned_patterns.values()),
+            'entity_types_learned': len(self.learned_patterns),
+            'contexts_stored': len(self.feedback_db.get('entity_contexts', {})),
+            'spacy_available': self.spacy_model is not None,
+            'confidence_threshold': self.confidence_threshold
+        }
+        
+        # Pattern performance by entity type
+        pattern_stats = {}
+        for entity_type, patterns in self.learned_patterns.items():
+            pattern_stats[entity_type] = len(patterns)
+        
+        stats['learned_patterns_by_type'] = pattern_stats
+        
+        return stats
+    
+    def update_confidence_threshold(self, threshold: float):
+        """Update confidence threshold for entity extraction"""
+        self.confidence_threshold = max(0.0, min(1.0, threshold))
+    
+    def _get_default_patterns(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Default patterns for financial entities"""
+        return {
+            "trade_id": [
+                {
+                    "pattern": r"\b(trade[\s-]?id|ref|reference|deal[\s-]?id|ticket)[\s:=]+([A-Z0-9-]{6,20})\b",
+                    "group": 2,
+                    "confidence": 0.9,
+                    "flags": "IGNORECASE"
+                }
+            ],
+            "amount": [
+                {
+                    "pattern": r"\b(USD|EUR|GBP|JPY|CHF)\s*([\d,]+\.?\d*)\b",
+                    "group": 2,
+                    "confidence": 0.9,
+                    "flags": "IGNORECASE"
+                }
+            ],
+            "currency": [
+                {
+                    "pattern": r"\b(USD|EUR|GBP|JPY|CHF|AUD|CAD|SEK|NOK|DKK)\b",
+                    "group": 1,
+                    "confidence": 0.8,
+                    "flags": "NONE"
+                }
+            ]
+        }
