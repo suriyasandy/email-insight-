@@ -1,0 +1,286 @@
+import extract_msg
+from bs4 import BeautifulSoup
+import email.utils
+import re
+from datetime import datetime
+from typing import Dict, List, Optional, Any
+import io
+
+class EmailParser:
+    """Email parser for .msg files with thread reconstruction capabilities"""
+    
+    def __init__(self):
+        self.supported_formats = ['.msg']
+    
+    def parse_msg_file(self, uploaded_file) -> Dict[str, Any]:
+        """
+        Parse a .msg file and extract all relevant information
+        
+        Args:
+            uploaded_file: Streamlit uploaded file object
+            
+        Returns:
+            Dictionary containing parsed email data
+        """
+        try:
+            # Read the file content
+            file_content = uploaded_file.read()
+            
+            # Create a file-like object for extract_msg
+            msg_file = io.BytesIO(file_content)
+            
+            # Parse the .msg file
+            msg = extract_msg.Message(msg_file)
+            
+            # Extract basic email information
+            email_data = {
+                'sender': self._clean_email_address(msg.sender),
+                'recipients': self._parse_recipients(msg.to),
+                'cc': self._parse_recipients(msg.cc) if msg.cc else [],
+                'bcc': self._parse_recipients(msg.bcc) if msg.bcc else [],
+                'subject': msg.subject or '',
+                'date': self._parse_date_as_string(msg.date),
+                'body': self._extract_body_text(msg),
+                'html_body': msg.htmlBody or '',
+                'attachments': self._extract_attachments(msg),
+                'headers': self._extract_headers(msg),
+                'message_id': self._extract_message_id(msg),
+                'in_reply_to': self._extract_in_reply_to(msg),
+                'references': self._extract_references(msg),
+                'thread_topic': self._extract_thread_topic(msg.subject or ''),
+                'importance': getattr(msg, 'importance', 'normal'),
+                'read_receipt': getattr(msg, 'read_receipt', False)
+            }
+            
+            # Extract any embedded tables or structured content
+            email_data['tables'] = self._extract_tables(msg.htmlBody or '')
+            email_data['structured_content'] = self._identify_structured_content(email_data['body'])
+            
+            # Close the message
+            msg.close()
+            
+            return email_data
+            
+        except Exception as e:
+            raise Exception(f"Failed to parse MSG file: {str(e)}")
+    
+    def _clean_email_address(self, email_addr: str) -> str:
+        """Clean and normalize email address"""
+        if not email_addr:
+            return ''
+        
+        # Extract email from "Name <email@domain.com>" format
+        if '<' in email_addr and '>' in email_addr:
+            match = re.search(r'<([^>]+)>', email_addr)
+            if match:
+                return match.group(1).strip()
+        
+        return email_addr.strip()
+    
+    def _parse_recipients(self, recipients_str: str) -> List[str]:
+        """Parse recipients string into list of email addresses"""
+        if not recipients_str:
+            return []
+        
+        recipients = []
+        # Split by semicolon or comma
+        raw_recipients = re.split(r'[;,]', recipients_str)
+        
+        for recipient in raw_recipients:
+            cleaned = self._clean_email_address(recipient)
+            if cleaned:
+                recipients.append(cleaned)
+        
+        return recipients
+    
+    def _parse_date(self, date_str: str) -> Optional[datetime]:
+        """Parse email date string"""
+        if not date_str:
+            return None
+        
+        try:
+            # Try parsing with email.utils first
+            parsed_date = email.utils.parsedate_to_datetime(str(date_str))
+            return parsed_date
+        except:
+            try:
+                # Fallback to direct datetime parsing
+                return datetime.fromisoformat(str(date_str).replace('Z', '+00:00'))
+            except:
+                return None
+    
+    def _parse_date_as_string(self, date_str: str) -> Optional[str]:
+        """Parse email date string and return as ISO string"""
+        parsed_date = self._parse_date(date_str)
+        return parsed_date.isoformat() if parsed_date else None
+    
+    def _extract_body_text(self, msg) -> str:
+        """Extract plain text body from message"""
+        # Try to get plain text body first
+        if hasattr(msg, 'body') and msg.body:
+            return msg.body
+        
+        # Fallback to HTML body converted to text
+        if hasattr(msg, 'htmlBody') and msg.htmlBody:
+            soup = BeautifulSoup(msg.htmlBody, 'html.parser')
+            return soup.get_text(separator='\n', strip=True)
+        
+        return ''
+    
+    def _extract_attachments(self, msg) -> List[Dict[str, Any]]:
+        """Extract attachment information"""
+        attachments = []
+        
+        if hasattr(msg, 'attachments') and msg.attachments:
+            for attachment in msg.attachments:
+                try:
+                    att_info = {
+                        'filename': getattr(attachment, 'longFilename', '') or getattr(attachment, 'shortFilename', ''),
+                        'size': getattr(attachment, 'size', 0),
+                        'content_type': getattr(attachment, 'mimetype', 'application/octet-stream'),
+                        'is_embedded': getattr(attachment, 'type', '') == 'data'
+                    }
+                    attachments.append(att_info)
+                except:
+                    continue
+        
+        return attachments
+    
+    def _extract_headers(self, msg) -> Dict[str, str]:
+        """Extract email headers for thread reconstruction"""
+        headers = {}
+        
+        # Try to access headers if available
+        if hasattr(msg, 'header'):
+            try:
+                header_dict = msg.header
+                if isinstance(header_dict, dict):
+                    headers = header_dict
+            except:
+                pass
+        
+        # Extract specific headers we need for threading
+        if hasattr(msg, 'messageId'):
+            headers['Message-ID'] = msg.messageId
+        if hasattr(msg, 'inReplyTo'):
+            headers['In-Reply-To'] = msg.inReplyTo
+        if hasattr(msg, 'references'):
+            headers['References'] = msg.references
+        
+        return headers
+    
+    def _extract_message_id(self, msg) -> str:
+        """Extract Message-ID for thread reconstruction"""
+        # Try multiple ways to get message ID
+        if hasattr(msg, 'messageId') and msg.messageId:
+            return msg.messageId
+        
+        headers = self._extract_headers(msg)
+        return headers.get('Message-ID', '')
+    
+    def _extract_in_reply_to(self, msg) -> str:
+        """Extract In-Reply-To header"""
+        if hasattr(msg, 'inReplyTo') and msg.inReplyTo:
+            return msg.inReplyTo
+        
+        headers = self._extract_headers(msg)
+        return headers.get('In-Reply-To', '')
+    
+    def _extract_references(self, msg) -> List[str]:
+        """Extract References header"""
+        references = []
+        
+        if hasattr(msg, 'references') and msg.references:
+            ref_str = msg.references
+        else:
+            headers = self._extract_headers(msg)
+            ref_str = headers.get('References', '')
+        
+        if ref_str:
+            # Split references by whitespace
+            references = ref_str.strip().split()
+        
+        return references
+    
+    def _extract_thread_topic(self, subject: str) -> str:
+        """Extract thread topic by removing Re:, Fw:, etc."""
+        if not subject:
+            return ''
+        
+        # Remove common prefixes
+        cleaned_subject = re.sub(r'^(Re:|RE:|Fw:|FW:|Fwd:|FWD:)\s*', '', subject, flags=re.IGNORECASE)
+        cleaned_subject = re.sub(r'^\[.*?\]\s*', '', cleaned_subject)  # Remove [tags]
+        
+        return cleaned_subject.strip()
+    
+    def _extract_tables(self, html_body: str) -> List[List[List[str]]]:
+        """Extract tables from HTML body"""
+        tables = []
+        
+        if not html_body:
+            return tables
+        
+        try:
+            soup = BeautifulSoup(html_body, 'html.parser')
+            html_tables = soup.find_all('table')
+            
+            for table in html_tables:
+                table_data = []
+                rows = table.find_all('tr')
+                
+                for row in rows:
+                    row_data = []
+                    cells = row.find_all(['td', 'th'])
+                    
+                    for cell in cells:
+                        cell_text = cell.get_text(strip=True)
+                        row_data.append(cell_text)
+                    
+                    if row_data:  # Only add non-empty rows
+                        table_data.append(row_data)
+                
+                if table_data:
+                    tables.append(table_data)
+        
+        except Exception as e:
+            # Log error but don't fail
+            pass
+        
+        return tables
+    
+    def _identify_structured_content(self, body_text: str) -> Dict[str, Any]:
+        """Identify structured content patterns in email body"""
+        structured_content = {
+            'trade_blocks': [],
+            'numbered_lists': [],
+            'bullet_points': [],
+            'key_value_pairs': []
+        }
+        
+        if not body_text:
+            return structured_content
+        
+        lines = body_text.split('\n')
+        
+        # Look for trade blocks (common patterns)
+        trade_block_pattern = re.compile(r'(trade\s+id|ref|reference|deal)[\s:]+([A-Z0-9-]+)', re.IGNORECASE)
+        for line in lines:
+            if trade_block_pattern.search(line):
+                structured_content['trade_blocks'].append(line.strip())
+        
+        # Look for numbered lists
+        numbered_pattern = re.compile(r'^\s*\d+[\.\)]\s+(.+)', re.MULTILINE)
+        numbered_matches = numbered_pattern.findall(body_text)
+        structured_content['numbered_lists'] = numbered_matches
+        
+        # Look for bullet points
+        bullet_pattern = re.compile(r'^\s*[-â¢*]\s+(.+)', re.MULTILINE)
+        bullet_matches = bullet_pattern.findall(body_text)
+        structured_content['bullet_points'] = bullet_matches
+        
+        # Look for key-value pairs
+        kv_pattern = re.compile(r'^([^:\n]+):\s*([^:\n]+)$', re.MULTILINE)
+        kv_matches = kv_pattern.findall(body_text)
+        structured_content['key_value_pairs'] = [{'key': k.strip(), 'value': v.strip()} for k, v in kv_matches]
+        
+        return structured_content
