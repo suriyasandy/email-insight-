@@ -1,0 +1,14 @@
+import axios from "axios";
+
+const handleApiCall = async (data: any) => {
+  try {
+    const response = await axios.post("http://127.0.0.1:5000/api/process", data, {
+      headers: {
+        "Content-Type": "application/json"
+      }
+    });
+    console.log("API Response:", response.data);
+  } catch (error) {
+    console.error("API Error:", error);
+  }
+};
