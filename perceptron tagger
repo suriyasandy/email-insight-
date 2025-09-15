@@ -1,0 +1,16 @@
+import os, nltk, pickle
+from nltk.tag.perceptron import PerceptronTagger
+
+nltk_path = r"C:\path\to\nltk_data"
+tagger_path = os.path.join(nltk_path, "taggers", "averaged_perceptron_tagger", "averaged_perceptron_tagger.pickle")
+
+tagger = PerceptronTagger(load=False)  # initialize empty
+with open(tagger_path, "rb") as f:
+    params = pickle.load(f)            # load the parameters
+    tagger.model.weights = params['weights']
+    tagger.model.classes = params['classes']
+    tagger.model.tagdict = params['tagdict']
+    tagger.model.classes = list(tagger.model.classes)
+
+tokens = ["Barack", "Obama", "was", "born", "in", "Hawaii", "."]
+print(tagger.tag(tokens))
