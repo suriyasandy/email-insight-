@@ -1,33 +1,37 @@
-def offline_nltk_pipeline(text, nltk_path=r"C:\path\to\nltk_data"):
-    import nltk, os, pickle
-    nltk.data.path.append(nltk_path)
+import os, pickle, nltk
+from nltk.tokenize import TreebankWordTokenizer
+from nltk import pos_tag
 
-    # Load punkt directly
-    punkt_path = os.path.join(nltk_path, "tokenizers", "punkt", "english.pickle")
-    with open(punkt_path, "rb") as f:
-        sent_tokenizer = pickle.load(f)
+# --- Configure your local nltk_data path ---
+nltk_path = r"C:\path\to\nltk_data"   # change this to your offline nltk_data folder
+nltk.data.path.append(nltk_path)
 
-    from nltk.tokenize import TreebankWordTokenizer
-    from nltk import pos_tag, ne_chunk
+# --- Load sentence tokenizer directly from english.pickle ---
+punkt_path = os.path.join(nltk_path, "tokenizers", "punkt", "english.pickle")
+with open(punkt_path, "rb") as f:
+    sent_tokenizer = pickle.load(f)
 
-    word_tokenizer = TreebankWordTokenizer()
+# --- Word tokenizer (doesn't need extra data) ---
+word_tokenizer = TreebankWordTokenizer()
 
+def offline_nltk_pipeline(text: str):
     results = []
     for sent in sent_tokenizer.tokenize(text):
         tokens = word_tokenizer.tokenize(sent)
-        pos_tags = pos_tag(tokens)
-        ner_tree = ne_chunk(pos_tags)
+        pos_tags = pos_tag(tokens)   # uses your offline taggers
         results.append({
             "sentence": sent,
             "tokens": tokens,
-            "pos": pos_tags,
-            "ner": ner_tree
+            "pos_tags": pos_tags
         })
     return results
 
 
 # Example usage
-text = "Barack Obama was born in Hawaii. He was elected president in 2008."
-pipeline_output = offline_nltk_pipeline(text)
-for step in pipeline_output:
-    print(step)
+text = "Barack Obama was born in Hawaii. He became president in 2008."
+output = offline_nltk_pipeline(text)
+
+for sent_info in output:
+    print("\nSentence:", sent_info["sentence"])
+    print("Tokens:", sent_info["tokens"])
+    print("POS Tags:", sent_info["pos_tags"])
