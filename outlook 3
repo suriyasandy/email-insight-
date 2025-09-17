@@ -1,0 +1,301 @@
+import tkinter as tk
+from tkinter import ttk, scrolledtext, messagebox, filedialog
+import pandas as pd
+from bs4 import BeautifulSoup
+import os
+import re
+import extract_msg
+import html2text
+
+class EmailAttributeExtractor:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Email Attribute Extractor")
+        self.root.geometry("1000x800")
+        self.root.resizable(True, True)
+        
+        # Configure style
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Create main frame
+        main_frame = ttk.Frame(root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Configure grid weights
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(7, weight=1)
+        
+        # File selection
+        ttk.Label(main_frame, text="MSG File:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.file_path_var = tk.StringVar()
+        file_entry = ttk.Entry(main_frame, textvariable=self.file_path_var, width=50)
+        file_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(0, 5))
+        ttk.Button(main_frame, text="Browse", command=self.browse_file).grid(row=0, column=2, pady=5)
+        
+        # Attribute definitions
+        ttk.Label(main_frame, text="Attribute Definitions (label:pattern):").grid(row=1, column=0, sticky=tk.W, pady=5)
+        
+        # Text area for attribute definitions
+        self.attribute_text = scrolledtext.ScrolledText(main_frame, width=60, height=8)
+        self.attribute_text.grid(row=1, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        
+        # Load default attribute patterns
+        default_attributes = """Trade ID:Trade\s*ID[:\s]*([A-Z0-9-]+)
+Date:Date[:\s]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})
+Time:Time[:\s]*(\d{1,2}:\d{2}\s*(?:AM|PM)?)
+Quantity:Quantity[:\s]*(\d+(?:\.\d+)?)
+Price:Price[:\s]*(\$?\d+(?:\.\d+)?)
+Symbol:Symbol[:\s]*([A-Z]+)
+Action:Action[:\s]*(Buy|Sell|Hold)
+Status:Status[:\s]*(Pending|Completed|Rejected)"""
+        
+        self.attribute_text.insert(1.0, default_attributes)
+        
+        # Buttons frame
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=2, column=0, columnspan=3, pady=10)
+        
+        ttk.Button(button_frame, text="Extract Attributes", command=self.extract_attributes).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Clear Results", command=self.clear_results).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Export to CSV", command=self.export_to_csv).pack(side=tk.LEFT, padx=5)
+        
+        # Progress bar
+        self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
+        self.progress.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+        
+        # Results area
+        ttk.Label(main_frame, text="Extracted Attributes:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        
+        # Treeview for extracted attributes
+        self.tree = ttk.Treeview(main_frame, columns=('Attribute', 'Value'), show='headings')
+        self.tree.heading('Attribute', text='Attribute')
+        self.tree.heading('Value', text='Value')
+        self.tree.column('Attribute', width=150)
+        self.tree.column('Value', width=300)
+        self.tree.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        
+        # Add scrollbar to treeview
+        tree_scroll = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        tree_scroll.grid(row=5, column=3, sticky=(tk.N, tk.S))
+        self.tree.configure(yscrollcommand=tree_scroll.set)
+        
+        # Email content area
+        ttk.Label(main_frame, text="Email Content:").grid(row=6, column=0, sticky=tk.W, pady=5)
+        
+        self.content_text = scrolledtext.ScrolledText(main_frame, width=80, height=15)
+        self.content_text.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        
+        # Store extracted data
+        self.attributes = []
+        self.email_content = ""
+        
+    def browse_file(self):
+        file_path = filedialog.askopenfilename(
+            title="Select MSG File",
+            filetypes=[("Outlook MSG Files", "*.msg"), ("All Files", "*.*")]
+        )
+        if file_path:
+            self.file_path_var.set(file_path)
+        
+    def extract_attributes(self):
+        file_path = self.file_path_var.get().strip()
+        
+        if not file_path or not os.path.exists(file_path):
+            messagebox.showwarning("Input Error", "Please select a valid MSG file")
+            return
+            
+        self.progress.start()
+        self.clear_results()
+        
+        try:
+            # Get attribute definitions
+            attr_text = self.attribute_text.get(1.0, tk.END).strip()
+            attribute_patterns = self.parse_attribute_definitions(attr_text)
+            
+            # Process the MSG file
+            email_data = self.process_msg_file(file_path)
+            
+            if email_data:
+                self.email_content = email_data['body']
+                
+                # Display email content
+                self.content_text.delete(1.0, tk.END)
+                self.content_text.insert(1.0, self.email_content)
+                
+                # Extract attributes
+                self.extract_attributes_from_content(attribute_patterns)
+                
+                # Display results
+                for attr, value in self.attributes:
+                    self.tree.insert('', 'end', values=(attr, value))
+                
+                messagebox.showinfo("Success", f"Extracted {len(self.attributes)} attributes from the email")
+            else:
+                messagebox.showwarning("Error", "Could not extract content from the MSG file")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred: {str(e)}")
+        finally:
+            self.progress.stop()
+            
+    def parse_attribute_definitions(self, attr_text):
+        patterns = {}
+        lines = attr_text.split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            if line and ':' in line:
+                parts = line.split(':', 1)
+                if len(parts) == 2:
+                    label = parts[0].strip()
+                    pattern = parts[1].strip()
+                    patterns[label] = pattern
+                    
+        return patterns
+    
+    def process_msg_file(self, file_path):
+        try:
+            # Open the MSG file
+            msg = extract_msg.Message(file_path)
+            
+            # Extract email data
+            subject = msg.subject or ""
+            body = msg.body or ""
+            html_body = msg.htmlBody or ""
+            
+            # Extract text content
+            text_content = self.extract_text_content(body, html_body)
+            
+            # Get sender information
+            sender = msg.sender or "Unknown"
+            
+            # Get date
+            date = msg.date.strftime("%Y-%m-%d %H:%M:%S") if msg.date else "Unknown"
+            
+            # Store email data
+            email_data = {
+                'subject': subject,
+                'sender': sender,
+                'date': date,
+                'body': text_content,
+                'html_body': html_body
+            }
+            
+            # Close the message
+            msg.close()
+            
+            return email_data
+            
+        except Exception as e:
+            print(f"Error processing MSG file: {e}")
+            return None
+    
+    def extract_text_content(self, plain_text, html_content):
+        if plain_text:
+            return plain_text
+        
+        if html_content:
+            try:
+                # Use html2text to convert HTML to plain text
+                h = html2text.HTML2Text()
+                h.ignore_links = False
+                return h.handle(html_content)
+            except Exception as e:
+                print(f"Error converting HTML to text: {e}")
+                return html_content
+                
+        return ""
+    
+    def extract_attributes_from_content(self, attribute_patterns):
+        self.attributes = []
+        
+        for label, pattern in attribute_patterns.items():
+            try:
+                # Try to find the pattern in the email content
+                match = re.search(pattern, self.email_content, re.IGNORECASE)
+                if match:
+                    # If we have capturing groups, use the first one
+                    if match.groups():
+                        value = match.group(1).strip()
+                    else:
+                        value = match.group(0).strip()
+                    
+                    self.attributes.append((label, value))
+                else:
+                    # Try alternative patterns for common attributes
+                    value = self.try_alternative_patterns(label, self.email_content)
+                    if value:
+                        self.attributes.append((label, value))
+            except Exception as e:
+                print(f"Error extracting {label}: {e}")
+    
+    def try_alternative_patterns(self, label, content):
+        # Try alternative patterns for common attributes
+        if label.lower() == 'trade id':
+            # Look for patterns like TRADE123, ID: ABC123, etc.
+            patterns = [
+                r'TRADE\s*[#]?\s*([A-Z0-9-]+)',
+                r'ID\s*[:\s]\s*([A-Z0-9-]+)',
+                r'Transaction\s*[#]?\s*([A-Z0-9-]+)'
+            ]
+        elif label.lower() == 'date':
+            patterns = [
+                r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
+                r'Date\s*[:\s]\s*(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})'
+            ]
+        elif label.lower() == 'quantity':
+            patterns = [
+                r'Qty\s*[:\s]\s*(\d+(?:\.\d+)?)',
+                r'Quantity\s*[:\s]\s*(\d+(?:\.\d+)?)',
+                r'(\d+(?:\.\d+)?)\s*(?:shares|units)'
+            ]
+        elif label.lower() == 'price':
+            patterns = [
+                r'Price\s*[:\s]\s*(\$?\d+(?:\.\d+)?)',
+                r'@\s*(\$?\d+(?:\.\d+)?)',
+                r'(\$?\d+(?:\.\d+)?)\s*per\s*(?:share|unit)'
+            ]
+        else:
+            return None
+            
+        for pattern in patterns:
+            match = re.search(pattern, content, re.IGNORECASE)
+            if match:
+                if match.groups():
+                    return match.group(1).strip()
+                else:
+                    return match.group(0).strip()
+                    
+        return None
+    
+    def clear_results(self):
+        self.tree.delete(*self.tree.get_children())
+        self.content_text.delete(1.0, tk.END)
+        self.attributes = []
+        self.email_content = ""
+    
+    def export_to_csv(self):
+        if not self.attributes:
+            messagebox.showwarning("No Data", "No attributes to export")
+            return
+            
+        try:
+            # Create a DataFrame from the extracted attributes
+            data = [{'Attribute': attr, 'Value': value} for attr, value in self.attributes]
+            df = pd.DataFrame(data)
+            
+            # Save to CSV
+            filename = f"extracted_attributes.csv"
+            df.to_csv(filename, index=False)
+            
+            messagebox.showinfo("Success", f"Data exported to {filename}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export data: {str(e)}")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = EmailAttributeExtractor(root)
+    root.mainloop()
