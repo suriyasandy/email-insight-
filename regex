@@ -1,1 +1,12 @@
 ^\d+L\d*\s+[A-Z]{3}\s+[\d,]+\.\d{2}\s+\d{2}/\d{2}/\d{4}\s+\d{2}/\d{2}/\d{4}\s+\S+\s+\S+$
+
+
+default_attributes = """Trade ID:Trade\s*ID[:\s]*([A-Z0-9-]+)
+Date:Date[:\s]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})
+Time:Time[:\s]*(\d{1,2}:\d{2}\s?(?:AM|PM)?)
+Quantity:Quantity[:\s]*(\d+(?:\.\d+)?)
+Price:Price[:\s]*(\$?\d+(?:\.\d+)?)
+Symbol:Symbol[:\s]*([A-Z]+)
+Action:Action[:\s]*(Buy|Sell|Hold)
+Status:Status[:\s]*(Pending|Completed|Rejected)
+Package:Package[:\s]*(\d+L\d*\s+[A-Z]{3}\s+[\d,]+\.\d{2}\s+\d{2}/\d{2}/\d{4}\s+\d{2}/\d{2}/\d{4}\s+\S+\s+\S+)"""
