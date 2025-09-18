@@ -1,0 +1,86 @@
+def export_to_csv(self):
+        if self.current_email_index == -1 or not self.emails:
+            messagebox.showwarning("No Selection", "Please select an email first")
+            return
+
+        email_data = self.emails[self.current_email_index]
+        text = self.entity_result_text.get(1.0, tk.END).strip()
+
+        if not text:
+            messagebox.showwarning("No Data", "No extracted entities to export")
+            return
+
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")]
+        )
+        if not save_path:
+            return
+
+        try:
+            rows = []
+            reader = text.splitlines()
+
+            # Parse entity result text
+            entity_dict = {}
+            current_key = None
+            for line in reader:
+                if line.endswith(":"):
+                    current_key = line[:-1]
+                    entity_dict[current_key] = []
+                elif line.strip().startswith("-"):
+                    value = line.strip().lstrip("-").strip()
+                    try:
+                        parsed_val = json.loads(value)  # for structured JSON (TradeBooking)
+                        entity_dict[current_key].append(parsed_val)
+                    except:
+                        entity_dict[current_key].append(value)
+
+            # Flatten TradeBooking separately
+            if "TradeBooking" in entity_dict:
+                for booking in entity_dict["TradeBooking"]:
+                    rows.append({
+                        "Email Subject": email_data['subject'],
+                        "Entity": "TradeBooking",
+                        "TradeID": booking.get("TradeID"),
+                        "Currency": booking.get("Currency"),
+                        "Amount": booking.get("Amount"),
+                        "StartDate": booking.get("StartDate"),
+                        "EndDate": booking.get("EndDate"),
+                        "Field1": booking.get("Field1"),
+                        "Field2": booking.get("Field2"),
+                        "Package": booking.get("Package"),
+                        "Value": ""
+                    })
+
+            # Flatten other entities
+            for key, values in entity_dict.items():
+                if key == "TradeBooking":
+                    continue
+                for val in values:
+                    rows.append({
+                        "Email Subject": email_data['subject'],
+                        "Entity": key,
+                        "TradeID": "",
+                        "Currency": "",
+                        "Amount": "",
+                        "StartDate": "",
+                        "EndDate": "",
+                        "Field1": "",
+                        "Field2": "",
+                        "Package": "",
+                        "Value": val
+                    })
+
+            # Write to CSV
+            if rows:
+                import csv
+                with open(save_path, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+                    writer.writeheader()
+                    writer.writerows(rows)
+
+            messagebox.showinfo("Export Successful", f"Entities exported to {save_path}")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export entities: {str(e)}")
