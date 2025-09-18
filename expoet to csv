@@ -1,0 +1,54 @@
+def export_to_csv(self):
+    if not self.emails:
+        messagebox.showwarning("No Data", "No emails to export")
+        return
+    try:
+        entity_json = self.entity_text.get(1.0, tk.END).strip()
+        entity_definitions = json.loads(entity_json)
+        all_data = []
+
+        for i, email_data in enumerate(self.emails):
+            # Extract all package details as list of dicts
+            package_pattern = None
+            for entity_def in entity_definitions.get("entities", []):
+                if entity_def.get("name") == "PackageDetails":
+                    package_pattern = entity_def.get("patterns", [])[0]
+                    break
+            rows = []
+            if package_pattern:
+                regex = re.compile(package_pattern, re.IGNORECASE)
+                for match in regex.finditer(email_data['body']):
+                    rows.append(match.groupdict())
+
+            # If found package rows, expand and add all, else add single row with email details only
+            if rows:
+                for row in rows:
+                    # Merge email meta info and extracted fields here
+                    row_data = {
+                        'Email_Index': i,
+                        'Subject': email_data['subject'],
+                        'From': email_data['sender'],
+                        'To': email_data['recipient'],
+                        'Date': email_data['date'],
+                        'Body_Preview': email_data['body'][:100] + "..." if len(email_data['body']) > 100 else email_data['body']
+                    }
+                    row_data.update(row)
+                    all_data.append(row_data)
+            else:
+                # No package details, export just email info
+                row_data = {
+                    'Email_Index': i,
+                    'Subject': email_data['subject'],
+                    'From': email_data['sender'],
+                    'To': email_data['recipient'],
+                    'Date': email_data['date'],
+                    'Body_Preview': email_data['body'][:100] + "..." if len(email_data['body']) > 100 else email_data['body']
+                }
+                all_data.append(row_data)
+
+        df = pd.DataFrame(all_data)
+        filename = f"email_entities_export_{self.trade_id_var.get()}.csv"
+        df.to_csv(filename, index=False)
+        messagebox.showinfo("Success", f"Data exported to {filename}")
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to export  {str(e)}")
