@@ -10,3 +10,37 @@ Symbol:Symbol[:\s]*([A-Z]+)
 Action:Action[:\s]*(Buy|Sell|Hold)
 Status:Status[:\s]*(Pending|Completed|Rejected)
 Package:Package[:\s]*(\d+L\d*\s+[A-Z]{3}\s+[\d,]+\.\d{2}\s+\d{2}/\d{2}/\d{4}\s+\d{2}/\d{2}/\d{4}\s+\S+\s+\S+)"""
+
+{
+  "entities": [
+    {
+      "name": "TradeBooking",
+      "type": "pattern",
+      "patterns": [
+        "^\\s*(\\d+[A-Z0-9]+)\\s+([A-Z]{3})\\s+([\\d,]+\\.\\d{2})\\s+(\\d{2}/\\d{2}/\\d{4})\\s+(\\d{2}/\\d{2}/\\d{4})\\s+(\\w+)\\s+(\\w+)\\s+(\\w+)\\s*$"
+      ]
+    }
+  ]
+}
+
+def extract_with_patterns(self, text, patterns):
+    results = []
+    for pat in patterns:
+        regex = re.compile(pat, re.MULTILINE)
+        matches = regex.findall(text)
+        for m in matches:
+            if isinstance(m, tuple):  # multiple groups
+                trade_id, currency, amount, start_date, end_date, field1, field2, package = m
+                results.append({
+                    "TradeID": trade_id,
+                    "Currency": currency,
+                    "Amount": float(amount.replace(",", "")),
+                    "StartDate": start_date,
+                    "EndDate": end_date,
+                    "Field1": field1,
+                    "Field2": field2,
+                    "Package": package
+                })
+            else:
+                results.append(m)
+    return results
