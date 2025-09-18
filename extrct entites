@@ -1,0 +1,73 @@
+    def extract_entities(self):
+        if self.current_email_index == -1 or not self.emails:
+            messagebox.showwarning("No Selection", "Please select an email from the chain first")
+            return
+        try:
+            entity_json = self.entity_text.get(1.0, tk.END).strip()
+            self.entity_definitions = json.loads(entity_json)
+        except Exception as e:
+            messagebox.showerror("Error", f"Invalid JSON format: {str(e)}")
+            return
+
+        email_data = self.emails[self.current_email_index]
+        entities = {}
+
+        # Extract using user-defined patterns and gazetteers
+        for entity_def in self.entity_definitions.get("entities", []):
+            name = entity_def["name"]
+            entities[name] = []
+            if entity_def["type"] == "pattern":
+                subj_matches = self.extract_with_patterns(email_data['subject'], entity_def.get("patterns", []))
+                for v in subj_matches:
+                    entities[name].append(f"{v} (Subject)")
+                body_matches = self.extract_with_patterns(email_data['body'], entity_def.get("patterns", []))
+                for v in body_matches:
+                    entities[name].append(f"{v} (Body)")
+            elif entity_def["type"] == "gazetteer":
+                subj_matches = self.extract_with_gazetteer(email_data['subject'], entity_def.get("values", []))
+                for v in subj_matches:
+                    entities[name].append(f"{v} (Subject)")
+                body_matches = self.extract_with_gazetteer(email_data['body'], entity_def.get("values", []))
+                for v in body_matches:
+                    entities[name].append(f"{v} (Body)")
+
+        # 🔹 Extra: Parse trade booking lines like your screenshot
+        booking_pattern = re.compile(
+            r'^(\d+[A-Z0-9]+)\s+([A-Z]{3})\s+([\d,]+\.\d{2})\s+'
+            r'(\d{2}/\d{2}/\d{4})\s+(\d{2}/\d{2}/\d{4})\s+'
+            r'(\w+)\s+(\w+)\s+(\w+)$',
+            re.MULTILINE
+        )
+        matches = booking_pattern.findall(email_data['body'])
+        if matches:
+            entities["TradeBooking"] = []
+            for m in matches:
+                trade_id, currency, amount, start_date, end_date, field1, field2, package = m
+                entities["TradeBooking"].append({
+                    "TradeID": trade_id,
+                    "Currency": currency,
+                    "Amount": float(amount.replace(",", "")),
+                    "StartDate": start_date,
+                    "EndDate": end_date,
+                    "Field1": field1,
+                    "Field2": field2,
+                    "Package": package
+                })
+
+        # Show results
+        self.entity_result_text.delete(1.0, tk.END)
+        if entities:
+            for k, vals in entities.items():
+                if vals:
+                    self.entity_result_text.insert(tk.END, f"{k}:\n")
+                    for val in vals:
+                        if isinstance(val, dict):
+                            self.entity_result_text.insert(tk.END, f"  - {json.dumps(val, indent=2)}\n")
+                        else:
+                            self.entity_result_text.insert(tk.END, f"  - {val}\n")
+                    self.entity_result_text.insert(tk.END, "\n")
+        else:
+            self.entity_result_text.insert(tk.END, "No entities found in this email")
+
+
+            
