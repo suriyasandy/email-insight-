@@ -8,7 +8,6 @@ import json
 import extract_msg
 import html2text
 import tempfile
-from datetime import datetime
 
 class EmailEntityExtractor:
     def __init__(self, root):
@@ -16,18 +15,21 @@ class EmailEntityExtractor:
         self.root.title("Email Entity Extractor")
         self.root.geometry("1200x900")
         self.root.resizable(True, True)
-
+        
+        # Configure style
         style = ttk.Style()
         style.theme_use('clam')
-
+        
+        # Create main frame
         main_frame = ttk.Frame(root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-
+        
+        # Configure grid weights
         root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(7, weight=1)
-
+        
         # File selection
         ttk.Label(main_frame, text="MSG File:").grid(row=0, column=0, sticky=tk.W, pady=5)
         self.file_path_var = tk.StringVar()
@@ -35,52 +37,54 @@ class EmailEntityExtractor:
         file_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(0, 5))
         ttk.Button(main_frame, text="Browse", command=self.browse_file).grid(row=0, column=2, pady=5)
 
-        # Trade ID input
+        # Trade ID entry
         ttk.Label(main_frame, text="Trade ID:").grid(row=0, column=3, sticky=tk.W, pady=5)
         self.trade_id_var = tk.StringVar()
         ttk.Entry(main_frame, textvariable=self.trade_id_var, width=20).grid(row=0, column=4, pady=5)
-
+        
         # Entity definitions
         ttk.Label(main_frame, text="Entity Definitions (JSON format):").grid(row=1, column=0, sticky=tk.W, pady=5)
-
+        
+        # Text area for entity definitions
         self.entity_text = scrolledtext.ScrolledText(main_frame, width=60, height=10)
         self.entity_text.grid(row=1, column=1, columnspan=4, sticky=(tk.W, tk.E), pady=5)
-
+        
+        # Load default entity patterns
         default_entities = {
             "entities": [
                 {
                     "name": "Trade ID",
                     "type": "pattern",
                     "patterns": [
-                        "Trade\\s*ID[:\\s]*([A-Z0-9-]+)",
+                        "Trade\\s*ID[:\s]*([A-Z0-9-]+)",
                         "TRADE\\s*[#]?\\s*([A-Z0-9-]+)",
-                        "ID\\s*[:\\s]\\s*([A-Z0-9-]+)"
+                        "ID\\s*[:\s]\\s*([A-Z0-9-]+)"
                     ]
                 },
                 {
                     "name": "Date",
                     "type": "pattern",
                     "patterns": [
-                        "Date[:\\s]*(\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4})",
-                        "(\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4})"
+                        "Date[:\s]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+                        "(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})"
                     ]
                 },
                 {
                     "name": "Quantity",
                     "type": "pattern",
                     "patterns": [
-                        "Quantity[:\\s]*(\\d+(?:\\.\\d+)?)",
-                        "Qty[:\\s]*(\\d+(?:\\.\\d+)?)",
-                        "(\\d+(?:\\.\\d+)?)\\s*(?:shares|units)"
+                        "Quantity[:\s]*(\d+(?:\.\d+)?)",
+                        "Qty[:\s]*(\d+(?:\.\d+)?)",
+                        "(\d+(?:\.\d+)?)\\s*(?:shares|units)"
                     ]
                 },
                 {
                     "name": "Price",
                     "type": "pattern",
                     "patterns": [
-                        "Price[:\\s]*(\\$?\\d+(?:\\.\\d+)?)",
-                        "@\\s*(\\$?\\d+(?:\\.\\d+)?)",
-                        "(\\$?\\d+(?:\\.\\d+)?)\\s*per\\s*(?:share|unit)"
+                        "Price[:\s]*(\$?\d+(?:\.\d+)?)",
+                        "@\\s*(\$?\d+(?:\.\d+)?)",
+                        "(\$?\d+(?:\.\d+)?)\\s*per\\s*(?:share|unit)"
                     ]
                 },
                 {
@@ -95,23 +99,28 @@ class EmailEntityExtractor:
                 }
             ]
         }
+        
         self.entity_text.insert(1.0, json.dumps(default_entities, indent=2))
-
+        
+        # Buttons frame
         button_frame = ttk.Frame(main_frame)
         button_frame.grid(row=2, column=0, columnspan=5, pady=10)
-
+        
         ttk.Button(button_frame, text="Extract Email Chain", command=self.extract_email_chain).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Extract Entities", command=self.extract_entities).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Clear Results", command=self.clear_results).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Export to CSV", command=self.export_to_csv).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Save Config", command=self.save_config).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Load Config", command=self.load_config).pack(side=tk.LEFT, padx=5)
-
+        
+        # Progress bar
         self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
         self.progress.grid(row=3, column=0, columnspan=5, sticky=(tk.W, tk.E), pady=5)
-
+        
+        # Email chain area
         ttk.Label(main_frame, text="Email Chain:").grid(row=4, column=0, sticky=tk.W, pady=5)
-
+        
+        # Treeview for email chain
         self.tree = ttk.Treeview(main_frame, columns=('Subject', 'From', 'To', 'Date', 'Email Type'), show='headings')
         self.tree.heading('Subject', text='Subject')
         self.tree.heading('From', text='From')
@@ -124,27 +133,32 @@ class EmailEntityExtractor:
         self.tree.column('Date', width=120)
         self.tree.column('Email Type', width=80)
         self.tree.grid(row=5, column=0, columnspan=5, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
-
+        
+        # Add scrollbar to treeview
         tree_scroll = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=self.tree.yview)
         tree_scroll.grid(row=5, column=5, sticky=(tk.N, tk.S))
         self.tree.configure(yscrollcommand=tree_scroll.set)
-
+        
+        # Email content area
         ttk.Label(main_frame, text="Email Content:").grid(row=6, column=0, sticky=tk.W, pady=5)
-
+        
         self.content_text = scrolledtext.ScrolledText(main_frame, width=80, height=15)
         self.content_text.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
-
+        
+        # Extracted entities area
         ttk.Label(main_frame, text="Extracted Entities:").grid(row=6, column=3, sticky=tk.W, pady=5)
-
+        
         self.entity_result_text = scrolledtext.ScrolledText(main_frame, width=40, height=15)
         self.entity_result_text.grid(row=7, column=3, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
-
+        
+        # Bind selection event
         self.tree.bind('<<TreeviewSelect>>', self.on_email_select)
-
+        
+        # Store extracted data
         self.emails = []
         self.current_email_index = -1
         self.entity_definitions = default_entities
-
+        
     def browse_file(self):
         file_path = filedialog.askopenfilename(
             title="Select MSG File",
@@ -152,39 +166,45 @@ class EmailEntityExtractor:
         )
         if file_path:
             self.file_path_var.set(file_path)
-
+        
     def extract_email_chain(self):
         file_path = self.file_path_var.get().strip()
+        trade_id = self.trade_id_var.get().strip()
+        
         if not file_path or not os.path.exists(file_path):
             messagebox.showwarning("Input Error", "Please select a valid MSG file")
             return
-
+            
+        if not trade_id:
+            messagebox.showwarning("Input Error", "Please enter a Trade ID")
+            return
+            
         self.progress.start()
         self.clear_results()
-
+        
         try:
+            # Process the MSG file
             self.emails = self.process_msg_file(file_path)
 
-            # sort emails latest → oldest
-            def parse_date(d):
-                try:
-                    return datetime.strptime(d, "%Y-%m-%d %H:%M:%S")
-                except:
-                    return datetime.min
-            self.emails.sort(key=lambda x: parse_date(x.get('date', '')), reverse=True)
+            # Validate Trade ID
+            found = any(
+                trade_id.lower() in (email['subject'] + email['body']).lower()
+                for email in self.emails
+            )
+            if not found:
+                messagebox.showerror("Trade ID Not Found", f"Trade ID '{trade_id}' not found in any email")
+                self.progress.stop()
+                return
 
-            # validate Trade ID
-            trade_id = self.trade_id_var.get().strip()
-            if trade_id:
-                found = any(trade_id.lower() in (email['subject'] + email['body']).lower()
-                            for email in self.emails)
-                if not found:
-                    messagebox.showerror("Trade ID Not Found", f"Trade ID '{trade_id}' not found in any email")
-                    self.progress.stop()
-                    return
-
+            # Sort emails latest → oldest
+            self.emails.sort(key=lambda x: x.get('date', ''), reverse=True)
+            
+            # Display email chain in treeview
             for i, email_data in enumerate(self.emails):
-                email_type = "Original" if i == 0 else f"Reply/Forward {i}"
+                email_type = "Original"
+                if i > 0:
+                    email_type = f"Reply {i}" if "re:" in email_data['subject'].lower() else f"Forward {i}"
+                
                 self.tree.insert('', 'end', iid=str(i), values=(
                     email_data['subject'][:30] + "..." if len(email_data['subject']) > 30 else email_data['subject'],
                     email_data['sender'][:20] + "..." if len(email_data['sender']) > 20 else email_data['sender'],
@@ -192,41 +212,50 @@ class EmailEntityExtractor:
                     email_data['date'],
                     email_type
                 ))
-
+            
             if not self.emails:
                 messagebox.showinfo("No Emails", "No emails found in the MSG file")
             else:
                 messagebox.showinfo("Success", f"Found {len(self.emails)} emails in the chain")
-
+                
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
         finally:
             self.progress.stop()
-
+            
     def process_msg_file(self, file_path):
         emails = []
+        
         try:
             msg = extract_msg.Message(file_path)
             main_email = self.extract_email_data(msg)
             if main_email:
                 emails.append(main_email)
+            
             body_emails = self.extract_emails_from_body(main_email['body'] if main_email else "")
             emails.extend(body_emails)
-
+            
             if hasattr(msg, 'attachments'):
                 for attachment in msg.attachments:
                     if attachment.type == 'msg':
-                        with tempfile.NamedTemporaryFile(suffix='.msg', delete=False) as temp_file:
-                            temp_path = temp_file.name
-                        with open(temp_path, 'wb') as f:
-                            f.write(attachment.data)
-                        emails.extend(self.process_msg_file(temp_path))
-                        os.unlink(temp_path)
+                        try:
+                            with tempfile.NamedTemporaryFile(suffix='.msg', delete=False) as temp_file:
+                                temp_path = temp_file.name
+                            with open(temp_path, 'wb') as f:
+                                f.write(attachment.data)
+                            attached_emails = self.process_msg_file(temp_path)
+                            emails.extend(attached_emails)
+                            os.unlink(temp_path)
+                        except Exception as e:
+                            print(f"Error processing attachment: {e}")
+            
             msg.close()
+            
         except Exception as e:
             print(f"Error processing MSG file: {e}")
+            
         return emails
-
+    
     def extract_email_data(self, msg):
         try:
             subject = msg.subject or ""
@@ -241,6 +270,7 @@ class EmailEntityExtractor:
                 except:
                     recipient = "Unknown"
             date = msg.date.strftime("%Y-%m-%d %H:%M:%S") if msg.date else "Unknown"
+            
             return {
                 'subject': subject,
                 'sender': sender,
@@ -252,45 +282,49 @@ class EmailEntityExtractor:
         except Exception as e:
             print(f"Error extracting email data: {e}")
             return None
-
+    
     def extract_emails_from_body(self, body):
         emails = []
-        patterns = [
+        email_patterns = [
             r'From:.*?Subject:.*?Date:.*?(?=From:|Subject:|Date:|$)',
-            r'-----Original Message-----.*?(?=-----Original Message-----|$)',
+            r'-----Original Message-----.*?-----',
+            r'On.*wrote:.*?From:.*?Subject:',
         ]
-        for pattern in patterns:
+        for pattern in email_patterns:
             matches = re.finditer(pattern, body, re.DOTALL | re.IGNORECASE)
             for match in matches:
                 email_text = match.group(0)
-                sender = re.search(r'From:\s*(.*?)(?=\n|$)', email_text, re.IGNORECASE)
-                recipient = re.search(r'To:\s*(.*?)(?=\n|$)', email_text, re.IGNORECASE)
-                subject = re.search(r'Subject:\s*(.*?)(?=\n|$)', email_text, re.IGNORECASE)
-                date = re.search(r'Date:\s*(.*?)(?=\n|$)', email_text, re.IGNORECASE)
-                body_start = email_text.find('\n\n')
+                sender_match = re.search(r'From:\s*(.*?)(?=\n|$)', email_text, re.IGNORECASE)
+                recipient_match = re.search(r'To:\s*(.*?)(?=\n|$)', email_text, re.IGNORECASE)
+                subject_match = re.search(r'Subject:\s*(.*?)(?=\n|$)', email_text, re.IGNORECASE)
+                date_match = re.search(r'Date:\s*(.*?)(?=\n|$)', email_text, re.IGNORECASE)
+                body_start = max(
+                    email_text.find('\n\n') if '\n\n' in email_text else 0,
+                    email_text.find('\r\n\r\n') if '\r\n\r\n' in email_text else 0
+                )
                 email_body = email_text[body_start:].strip() if body_start > 0 else email_text
                 emails.append({
-                    'subject': subject.group(1) if subject else "No Subject",
-                    'sender': sender.group(1) if sender else "Unknown",
-                    'recipient': recipient.group(1) if recipient else "Unknown",
-                    'date': date.group(1) if date else "Unknown",
+                    'subject': subject_match.group(1) if subject_match else "No Subject",
+                    'sender': sender_match.group(1) if sender_match else "Unknown",
+                    'recipient': recipient_match.group(1) if recipient_match else "Unknown",
+                    'date': date_match.group(1) if date_match else "Unknown",
                     'body': email_body,
                     'html_body': ""
                 })
         return emails
-
-    def extract_text_content(self, plain, html):
-        if plain:
-            return plain
-        if html:
+    
+    def extract_text_content(self, plain_text, html_content):
+        if plain_text:
+            return plain_text
+        if html_content:
             try:
                 h = html2text.HTML2Text()
                 h.ignore_links = False
-                return h.handle(html)
-            except:
-                return html
+                return h.handle(html_content)
+            except Exception:
+                return html_content
         return ""
-
+    
     def on_email_select(self, event):
         selection = self.tree.selection()
         if not selection:
@@ -299,12 +333,16 @@ class EmailEntityExtractor:
         self.current_email_index = email_index
         if 0 <= email_index < len(self.emails):
             email_data = self.emails[email_index]
-            content = f"From: {email_data['sender']}\nTo: {email_data['recipient']}\nDate: {email_data['date']}\nSubject: {email_data['subject']}\n"
-            content += "-" * 50 + "\n" + email_data['body']
+            content = f"From: {email_data['sender']}\n"
+            content += f"To: {email_data['recipient']}\n"
+            content += f"Date: {email_data['date']}\n"
+            content += f"Subject: {email_data['subject']}\n"
+            content += "-" * 50 + "\n"
+            content += email_data['body']
             self.content_text.delete(1.0, tk.END)
             self.content_text.insert(1.0, content)
             self.entity_result_text.delete(1.0, tk.END)
-
+    
     def extract_entities(self):
         if self.current_email_index == -1 or not self.emails:
             messagebox.showwarning("No Selection", "Please select an email from the chain first")
@@ -315,96 +353,56 @@ class EmailEntityExtractor:
         except Exception as e:
             messagebox.showerror("Error", f"Invalid JSON format: {str(e)}")
             return
-
         email_data = self.emails[self.current_email_index]
         entities = {}
-
         for entity_def in self.entity_definitions.get("entities", []):
-            entity_name = entity_def.get("name", "")
-            entity_type = entity_def.get("type", "")
-
-            values = []
-            if entity_type == "pattern":
+            name = entity_def["name"]
+            entities[name] = []
+            if entity_def["type"] == "pattern":
                 subj_matches = self.extract_with_patterns(email_data['subject'], entity_def.get("patterns", []))
                 for v in subj_matches:
-                    values.append(f"{v} (Subject)")
+                    entities[name].append(f"{v} (Subject)")
                 body_matches = self.extract_with_patterns(email_data['body'], entity_def.get("patterns", []))
                 for v in body_matches:
-                    values.append(f"{v} (Body)")
-            elif entity_type == "gazetteer":
-                gazetteer_vals = entity_def.get("values", [])
-                subj_matches = self.extract_with_gazetteer(email_data['subject'], gazetteer_vals)
+                    entities[name].append(f"{v} (Body)")
+            elif entity_def["type"] == "gazetteer":
+                subj_matches = self.extract_with_gazetteer(email_data['subject'], entity_def.get("values", []))
                 for v in subj_matches:
-                    values.append(f"{v} (Subject)")
-                body_matches = self.extract_with_gazetteer(email_data['body'], gazetteer_vals)
+                    entities[name].append(f"{v} (Subject)")
+                body_matches = self.extract_with_gazetteer(email_data['body'], entity_def.get("values", []))
                 for v in body_matches:
-                    values.append(f"{v} (Body)")
-
-            if values:
-                entities[entity_name] = values
-
+                    entities[name].append(f"{v} (Body)")
         self.entity_result_text.delete(1.0, tk.END)
         if entities:
-            for entity_name, values in entities.items():
-                self.entity_result_text.insert(tk.END, f"{entity_name}:\n")
-                for value in values:
-                    self.entity_result_text.insert(tk.END, f"  - {value}\n")
-                self.entity_result_text.insert(tk.END, "\n")
+            for k, vals in entities.items():
+                if vals:
+                    self.entity_result_text.insert(tk.END, f"{k}:\n")
+                    for val in vals:
+                        self.entity_result_text.insert(tk.END, f"  - {val}\n")
+                    self.entity_result_text.insert(tk.END, "\n")
         else:
             self.entity_result_text.insert(tk.END, "No entities found in this email")
-
+    
     def extract_with_patterns(self, content, patterns):
         values = []
         for pattern in patterns:
             try:
                 matches = re.findall(pattern, content, re.IGNORECASE)
                 for match in matches:
-                    val = match[0] if isinstance(match, tuple) else match
+                    val = match[0].strip() if isinstance(match, tuple) else str(match).strip()
                     if val and val not in values:
-                        values.append(val.strip())
-            except:
+                        values.append(val)
+            except Exception:
                 continue
         return values
-
-    def extract_with_gazetteer(self, content, gaz_vals):
+    
+    def extract_with_gazetteer(self, content, gazetteer_values):
         values = []
-        for v in gaz_vals:
+        for v in gazetteer_values:
             if re.search(r'\b' + re.escape(v) + r'\b', content, re.IGNORECASE):
                 if v not in values:
                     values.append(v)
         return values
-
+    
     def clear_results(self):
-        self.tree.delete(*self.tree.get_children())
-        self.content_text.delete(1.0, tk.END)
-        self.entity_result_text.delete(1.0, tk.END)
-        self.emails = []
-        self.current_email_index = -1
-
-    def export_to_csv(self):
-        if not self.emails:
-            messagebox.showwarning("No Data", "No emails to export")
-            return
-        try:
-            entity_json = self.entity_text.get(1.0, tk.END).strip()
-            entity_definitions = json.loads(entity_json)
-            all_data = []
-            for i, email_data in enumerate(self.emails):
-                entities = self.extract_entities_from_content(email_data, entity_definitions)
-                row = {
-                    'Email_Index': i,
-                    'Subject': email_data['subject'],
-                    'From': email_data['sender'],
-                    'To': email_data['recipient'],
-                    'Date': email_data['date'],
-                    'Body_Preview': email_data['body'][:100] + "..." if len(email_data['body']) > 100 else email_data['body']
-                }
-                for k, v in entities.items():
-                    row[k] = ", ".join(v)
-                all_data.append(row)
-            pd.DataFrame(all_data).to_csv("email_entities_export.csv", index=False)
-            messagebox.showinfo("Success", "Data exported to email_entities_export.csv")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to export data: {str(e)}")
-
-    def extract_entities_from
+        self.tree.delete(*self.tree
