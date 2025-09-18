@@ -1,79 +1,91 @@
-import easyocr
-from collections import defaultdict
-from tkinter import filedialog, Toplevel, Listbox, Scrollbar, RIGHT, Y, LEFT, BOTH
+from bs4 import BeautifulSoup
+import csv
+from tkinter import Toplevel, Scrollbar, Listbox, RIGHT, LEFT, BOTH, Y
 
-# Add this method to your EmailEntityExtractor class
-
-def extract_table_data(self):
-    # Prompt for image file containing table
-    image_path = filedialog.askopenfilename(title="Select Table Image File",
-                                            filetypes=[("Image Files", "*.png;*.jpg;*.jpeg;*.bmp"), ("All Files", "*.*")])
-    if not image_path:
+def extract_tables(self):
+    if not self.emails:
+        messagebox.showwarning("No Data", "No emails loaded for extraction")
+        return
+    
+    all_tables = []  # Will hold extracted data from all emails
+    
+    for idx, email in enumerate(self.emails):
+        html_content = email.get('html_body', '')
+        if not html_content:
+            continue
+        
+        soup = BeautifulSoup(html_content, 'html.parser')
+        tables = soup.find_all('table')
+        
+        for table in tables:
+            headers = []
+            rows = []
+            # Extract headers if any
+            header_row = table.find('tr')
+            if header_row:
+                headers = [th.get_text(strip=True) for th in header_row.find_all('th')]
+            # Extract all rows
+            for tr in table.find_all('tr')[1:]:  # Skip header row
+                cols = tr.find_all(['td','th'])
+                row_data = [col.get_text(strip=True) for col in cols]
+                rows.append(row_data)
+            
+            # Store table data with email context
+            all_tables.append({
+                'email_index': idx,
+                'subject': email.get('subject', ''),
+                'headers': headers,
+                'rows': rows
+            })
+    
+    if not all_tables:
+        messagebox.showinfo("No Tables", "No HTML tables found in email chain")
         return
 
-    self.progress.start()
+    # Optionally show extracted tables in popup window (optional)
+    self.show_tables_popup(all_tables)
+    
+    # Export combined tables to CSV
+    self.export_tables_to_csv(all_tables)
 
+def show_tables_popup(self, all_tables):
+    popup = Toplevel(self.root)
+    popup.title("Extracted HTML Tables")
+    listbox = Listbox(popup, width=120, height=30)
+    scrollbar = Scrollbar(popup)
+    scrollbar.pack(side=RIGHT, fill=Y)
+    listbox.pack(side=LEFT, fill=BOTH, expand=True)
+    listbox.config(yscrollcommand=scrollbar.set)
+    scrollbar.config(command=listbox.yview)
+
+    for table_info in all_tables:
+        listbox.insert('end', f"Email #{table_info['email_index']} Subject: {table_info['subject']}")
+        if table_info['headers']:
+            listbox.insert('end', "\t".join(table_info['headers']))
+        for row in table_info['rows']:
+            listbox.insert('end', "\t".join(row))
+        listbox.insert('end', "-"*80)
+
+def export_tables_to_csv(self, all_tables):
+    filename = filedialog.asksaveasfilename(
+        title="Save Extracted Tables CSV",
+        defaultextension=".csv",
+        filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")]
+    )
+    if not filename:
+        return
     try:
-        reader = easyocr.Reader(['en'], gpu=False)  # Use CPU, adjust languages as needed
-        results = reader.readtext(image_path)
-
-        # Group text by approximate row based on bbox vertical coordinate
-        rows = defaultdict(list)
-        row_threshold = 10  # pixels tolerance to group same line texts
-
-        for bbox, text, conf in results:
-            y_top = bbox[0][1]  # top-left y coordinate
-            # Find row key by y proximity
-            matched_row = None
-            for r in rows:
-                if abs(r - y_top) <= row_threshold:
-                    matched_row = r
-                    break
-            if matched_row is None:
-                matched_row = y_top
-            rows[matched_row].append((bbox, text))
-
-        # Sort rows by their Y coordinate
-        sorted_rows = sorted(rows.items(), key=lambda x: x[0])
-
-        # Sort each row by x coordinate (left to right)
-        table_lines = []
-        for _, row_cells in sorted_rows:
-            sorted_cells = sorted(row_cells, key=lambda x: x[0][0][0])
-            line_text = "\t".join([cell[1] for cell in sorted_cells])
-            table_lines.append(line_text)
-
-        # Display results in a popup window
-        popup = Toplevel(self.root)
-        popup.title("Extracted Table Data")
-        listbox = Listbox(popup, width=120, height=30)
-        scrollbar = Scrollbar(popup)
-        scrollbar.pack(side=RIGHT, fill=Y)
-        listbox.pack(side=LEFT, fill=BOTH, expand=True)
-        listbox.config(yscrollcommand=scrollbar.set)
-        scrollbar.config(command=listbox.yview)
-
-        for line in table_lines:
-            listbox.insert(tk.END, line)
-
+        with open(filename, mode='w', newline='', encoding='utf-8') as csv_file:
+            writer = csv.writer(csv_file)
+            for table_info in all_tables:
+                writer.writerow([f"Email Index: {table_info['email_index']}", f"Subject: {table_info['subject']}"])
+                if table_info['headers']:
+                    writer.writerow(table_info['headers'])
+                for row in table_info['rows']:
+                    writer.writerow(row)
+                writer.writerow([])  # Blank line between tables
+        messagebox.showinfo("Export Success", f"Extracted tables exported to {filename}")
     except Exception as e:
-        messagebox.showerror("Error", f"Failed to extract table data: {str(e)}")
+        messagebox.showerror("Export Error", f"Failed to export CSV: {e}")
 
-    finally:
-        self.progress.stop()
-
-
-# To integrate fully:
-# 1. Add the above extract_table_data method in your EmailEntityExtractor class.
-# 2. Add a new button in your GUI init after other buttons:
-
-# ttk.Button(button_frame, text="Extract Table Data", command=self.extract_table_data).pack(side=tk.LEFT, padx=5)
-
-# Note:
-# - Install easyocr package if not present: pip install easyocr
-# - This example assumes English language; adjust if needed.
-# - This is a basic table extraction approach grouping by y coordinate proximity, works well for clear tables.
-
-# You can enhance table structure extraction using OpenCV to detect explicit cell bounding boxes before OCR for accurate table cell recognition.
-
-# Let me know if you want me to provide the fully merged code with all parts or help expand table detection with OpenCV.
+ttk.Button(button_frame, text="Extract Tables", command=self.extract_tables).pack(side=tk.LEFT, padx=5)
