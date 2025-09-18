@@ -1,0 +1,79 @@
+import easyocr
+from collections import defaultdict
+from tkinter import filedialog, Toplevel, Listbox, Scrollbar, RIGHT, Y, LEFT, BOTH
+
+# Add this method to your EmailEntityExtractor class
+
+def extract_table_data(self):
+    # Prompt for image file containing table
+    image_path = filedialog.askopenfilename(title="Select Table Image File",
+                                            filetypes=[("Image Files", "*.png;*.jpg;*.jpeg;*.bmp"), ("All Files", "*.*")])
+    if not image_path:
+        return
+
+    self.progress.start()
+
+    try:
+        reader = easyocr.Reader(['en'], gpu=False)  # Use CPU, adjust languages as needed
+        results = reader.readtext(image_path)
+
+        # Group text by approximate row based on bbox vertical coordinate
+        rows = defaultdict(list)
+        row_threshold = 10  # pixels tolerance to group same line texts
+
+        for bbox, text, conf in results:
+            y_top = bbox[0][1]  # top-left y coordinate
+            # Find row key by y proximity
+            matched_row = None
+            for r in rows:
+                if abs(r - y_top) <= row_threshold:
+                    matched_row = r
+                    break
+            if matched_row is None:
+                matched_row = y_top
+            rows[matched_row].append((bbox, text))
+
+        # Sort rows by their Y coordinate
+        sorted_rows = sorted(rows.items(), key=lambda x: x[0])
+
+        # Sort each row by x coordinate (left to right)
+        table_lines = []
+        for _, row_cells in sorted_rows:
+            sorted_cells = sorted(row_cells, key=lambda x: x[0][0][0])
+            line_text = "\t".join([cell[1] for cell in sorted_cells])
+            table_lines.append(line_text)
+
+        # Display results in a popup window
+        popup = Toplevel(self.root)
+        popup.title("Extracted Table Data")
+        listbox = Listbox(popup, width=120, height=30)
+        scrollbar = Scrollbar(popup)
+        scrollbar.pack(side=RIGHT, fill=Y)
+        listbox.pack(side=LEFT, fill=BOTH, expand=True)
+        listbox.config(yscrollcommand=scrollbar.set)
+        scrollbar.config(command=listbox.yview)
+
+        for line in table_lines:
+            listbox.insert(tk.END, line)
+
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to extract table data: {str(e)}")
+
+    finally:
+        self.progress.stop()
+
+
+# To integrate fully:
+# 1. Add the above extract_table_data method in your EmailEntityExtractor class.
+# 2. Add a new button in your GUI init after other buttons:
+
+# ttk.Button(button_frame, text="Extract Table Data", command=self.extract_table_data).pack(side=tk.LEFT, padx=5)
+
+# Note:
+# - Install easyocr package if not present: pip install easyocr
+# - This example assumes English language; adjust if needed.
+# - This is a basic table extraction approach grouping by y coordinate proximity, works well for clear tables.
+
+# You can enhance table structure extraction using OpenCV to detect explicit cell bounding boxes before OCR for accurate table cell recognition.
+
+# Let me know if you want me to provide the fully merged code with all parts or help expand table detection with OpenCV.
