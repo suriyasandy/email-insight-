@@ -1,0 +1,55 @@
+def export_to_csv(self):
+    if not self.emails:
+        messagebox.showwarning("No Data", "No emails to export")
+        return
+    try:
+        entity_json = self.entity_text.get(1.0, tk.END).strip()
+        entity_definitions = json.loads(entity_json)
+
+        pattern_entities = [e for e in entity_definitions.get("entities", []) if e.get("type") == "pattern"]
+
+        all_rows = []
+        for i, email_data in enumerate(self.emails):
+            lines = email_data['body'].splitlines()
+            for line in lines:
+                line = line.strip()
+                row_dict = {
+                    'Email_Index': i,
+                    'Subject': email_data['subject'],
+                    'From': email_data['sender'],
+                    'To': email_data['recipient'],
+                    'Date': email_data['date'],
+                }
+                matched = False
+                for entity_def in pattern_entities:
+                    entity_name = entity_def.get("name")
+                    patterns = entity_def.get("patterns", [])
+                    for pattern in patterns:
+                        regex = re.compile(pattern)
+                        match = regex.fullmatch(line)
+                        if match:
+                            if entity_name == "PackageDetails":
+                                groupdict = match.groupdict()
+                                for k, v in groupdict.items():
+                                    row_dict[k] = v
+                            else:
+                                row_dict[entity_name] = match.group()
+                            matched = True
+                            break  # Only use first pattern that fully matches
+                    if matched:
+                        break  # Don't check further entity types for this line
+                if matched:
+                    all_rows.append(row_dict)
+        # Determine all used column names
+        all_columns = set()
+        for row in all_rows:
+            all_columns.update(row.keys())
+        all_columns = ['Email_Index', 'Subject', 'From', 'To', 'Date'] + [c for c in all_columns if c not in ['Email_Index', 'Subject', 'From', 'To', 'Date']]
+
+        # Export
+        df = pd.DataFrame(all_rows, columns=all_columns)
+        filename = f"email_entities_export_{self.trade_id_var.get()}.csv"
+        df.to_csv(filename, index=False)
+        messagebox.showinfo("Success", f"Data exported to {filename}")
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to export  {str(e)}")
