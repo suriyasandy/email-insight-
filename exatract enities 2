@@ -1,0 +1,65 @@
+def extract_entities(self):
+    if self.current_email_index == -1 or not self.emails:
+        messagebox.showwarning("No Selection", "Please select an email from the chain first")
+        return
+    try:
+        entity_json = self.entity_text.get(1.0, tk.END).strip()
+        self.entity_definitions = json.loads(entity_json)
+    except Exception as e:
+        messagebox.showerror("Error", f"Invalid JSON format: {str(e)}")
+        return
+
+    email_data = self.emails[self.current_email_index]
+    entities = {}
+
+    # NEW LOGIC: Loop through each line and try patterns in order
+    lines = email_data['body'].splitlines()
+    pattern_entities = [e for e in self.entity_definitions.get("entities", []) if e.get("type")=="pattern"]
+    for line in lines:
+        line = line.strip()
+        for entity_def in pattern_entities:
+            entity_name = entity_def.get("name")
+            patterns = entity_def.get("patterns", [])
+            matched = False
+            for pattern in patterns:
+                regex = re.compile(pattern)
+                match = regex.fullmatch(line)
+                if match:
+                    if entity_name == "PackageDetails":
+                        groupdict = match.groupdict()
+                        for k, v in groupdict.items():
+                            if v:
+                                entities.setdefault(k, []).append(f"{v} (Body)")
+                    else:
+                        entities.setdefault(entity_name, []).append(f"{match.group()} (Body)")
+                    matched = True
+                    break  # Only use the first pattern that matches fully
+            if matched:
+                break  # Don't check further entity types for this line
+
+    # Add gazetteer extraction as before...
+    for entity_def in self.entity_definitions.get("entities", []):
+        entity_name = entity_def.get("name", "")
+        entity_type = entity_def.get("type", "")
+        if entity_type == "gazetteer":
+            gazetteer_vals = entity_def.get("values", [])
+            subject_vals = self.extract_with_gazetteer(email_data['subject'], gazetteer_vals)
+            body_vals = self.extract_with_gazetteer(email_data['body'], gazetteer_vals)
+            all_vals = []
+            for v in subject_vals:
+                all_vals.append(f"{v} (Subject)")
+            for v in body_vals:
+                all_vals.append(f"{v} (Body)")
+            if all_vals:
+                entities[entity_name] = all_vals
+
+    # Display results
+    self.entity_result_text.delete(1.0, tk.END)
+    if entities:
+        for entity_name, vals in entities.items():
+            self.entity_result_text.insert(tk.END, f"{entity_name}:\n")
+            for v in vals:
+                self.entity_result_text.insert(tk.END, f"  - {v}\n")
+            self.entity_result_text.insert(tk.END, "\n")
+    else:
+        self.entity_result_text.insert(tk.END, "No entities found in this email")
