@@ -97,3 +97,25 @@ df = pd.DataFrame(records, columns=selected_columns)
 
 print(df)
 
+
+
+# take the first row from df2 as dict
+first_row_df2 = df2.iloc[0].to_dict()
+
+enriched_records = []
+
+for _, row in df1.iterrows():
+    row_dict = row.to_dict()
+
+    # check substring condition
+    if substring not in row_dict["Name"]:
+        # enrich with first row of df2
+        row_dict.update(first_row_df2)
+
+    enriched_records.append(row_dict)
+
+# build final dataframe
+final_df = pd.DataFrame(enriched_records)
+
+print(final_df)
+
