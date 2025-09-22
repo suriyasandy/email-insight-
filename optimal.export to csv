@@ -1,0 +1,96 @@
+def export_to_csv(self):
+    if not self.emails:
+        messagebox.showwarning("No Data", "No emails to export")
+        return
+    try:
+        entity_json = self.entity_text.get(1.0, tk.END).strip()
+        entity_definitions = json.loads(entity_json)
+
+        # Prepare entity rows as before
+        all_entity_rows = []
+        pattern_entities = [e for e in entity_definitions.get("entities", []) if e.get("type") == "pattern"]
+
+        for i, email_data in enumerate(self.emails):
+            lines = email_data['body'].splitlines()
+            for line in lines:
+                line = line.strip()
+                row_dict = {
+                    'Email_Index': i,
+                    'Subject': email_data['subject'],
+                    'From': email_data['sender'],
+                    'To': email_data['recipient'],
+                    'Date': email_data['date'],
+                }
+                matched = False
+                for entity_def in pattern_entities:
+                    entity_name = entity_def.get("name")
+                    patterns = entity_def.get("patterns", [])
+                    for pattern in patterns:
+                        regex = re.compile(pattern)
+                        match = regex.fullmatch(line)
+                        if match:
+                            if entity_name == "PackageDetails":
+                                groupdict = match.groupdict()
+                                for k, v in groupdict.items():
+                                    row_dict[k] = v
+                            else:
+                                row_dict[entity_name] = match.group()
+                            matched = True
+                            break
+                    if matched:
+                        break
+                if matched:
+                    all_entity_rows.append(row_dict)
+
+        # Determine columns order for entity export
+        column_order = ['Email_Index', 'Subject', 'From', 'To', 'Date']
+        for e in pattern_entities:
+            if e['name'] != 'PackageDetails':
+                column_order.append(e['name'])
+            else:
+                # Add PackageDetails named groups explicitly (if known)
+                named_groups = ['TradeID', 'Currency', 'Amount', 'StartDate', 'EndDate', 'Book1', 'Book2']
+                column_order.extend(ng for ng in named_groups if ng not in column_order)
+
+        # Export entities and tables to one file
+        filename = f"email_entities_export_{self.trade_id_var.get()}.csv"
+        with open(filename, 'w', encoding='utf-8', newline='') as f:
+            import csv
+            writer = csv.DictWriter(f, fieldnames=column_order)
+            writer.writeheader()
+            for row in all_entity_rows:
+                writer.writerow(row)
+
+            # Blank lines before tables section
+            writer.writerow({})
+            writer.writerow({})
+            writer.writerow({'Email_Index': '--- Extracted Tables ---'})
+
+            # Append tables per email
+            for i, email_data in enumerate(self.emails):
+                tables = []
+                # For your email data, get tables from html_body or parsed tables if you extracted them
+                html_body = email_data.get('html_body', '') or ''
+                if html_body:
+                    # Parse tables using BeautifulSoup
+                    try:
+                        from bs4 import BeautifulSoup
+                        soup = BeautifulSoup(html_body, 'html.parser')
+                        tables = soup.find_all('table')
+                    except:
+                        tables = []
+
+                if tables:
+                    writer.writerow({})
+                    writer.writerow({'Email_Index': f"Email #{i}: {email_data['subject']}"})
+                    for tidx, table in enumerate(tables, 1):
+                        writer.writerow({})
+                        writer.writerow({'Email_Index': f"Table {tidx} (rows x cols): {len(table.find_all('tr'))} x {len(table.find_all('tr')[0].find_all(['td','th'])) if table.find_all('tr') else 0}"})
+                        # Extract table rows
+                        for tr in table.find_all('tr'):
+                            cells = [c.get_text(strip=True).replace('\n', ' ') for c in tr.find_all(['th','td'])]
+                            writer.writerow({column_order[0]: ', '.join(cells)})
+
+        messagebox.showinfo("Success", f"Data and tables exported to {filename}")
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to export data and tables: {str(e)}")
