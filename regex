@@ -69,3 +69,31 @@ df = pd.DataFrame(records)
 
 print(df)
 
+
+
+
+
+import pandas as pd
+
+# Columns we want
+selected_columns = ["CustomerID", "Name"]
+
+records = []
+for table in all_tables:
+    row_dict = {}
+    for sublist in table["rows"]:
+        # remove empty strings and ":"
+        cleaned = [x.strip(":") for x in sublist if x.strip() != ""]
+        if len(cleaned) >= 2:
+            key, value = cleaned[0], cleaned[1]
+            row_dict[key] = value
+
+    # pick only selected columns
+    filtered_row = {col: row_dict.get(col) for col in selected_columns}
+    records.append(filtered_row)
+
+# final dataframe
+df = pd.DataFrame(records, columns=selected_columns)
+
+print(df)
+
