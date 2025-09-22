@@ -1,0 +1,225 @@
+import tkinter as tk
+from tkinter import ttk, scrolledtext, messagebox, filedialog
+import pandas as pd
+import re
+import json
+from datetime import datetime
+import win32com.client
+from bs4 import BeautifulSoup
+
+class EmailEntityExtractor:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Email Entity Extractor (Multiple Trade IDs)")
+        self.root.geometry("1100x700")
+        self.root.resizable(True, True)
+
+        style = ttk.Style()
+        style.theme_use('clam')
+
+        main_frame = ttk.Frame(root, padding=10)
+        main_frame.grid(row=0, column=0, sticky="nsew")
+
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(4, weight=1)
+
+        ttk.Label(main_frame, text="Trade IDs (comma or space separated):").grid(row=0, column=0, sticky="w")
+        self.trade_ids_var = tk.StringVar()
+        ttk.Entry(main_frame, textvariable=self.trade_ids_var, width=60).grid(row=0, column=1, sticky="ew", padx=5)
+
+        ttk.Label(main_frame, text="Outlook Folder:").grid(row=1, column=0, sticky="w")
+        self.folder_var = tk.StringVar(value="Inbox")
+        folder_combo = ttk.Combobox(main_frame, textvariable=self.folder_var, state="readonly", width=57)
+        folder_combo.grid(row=1, column=1, sticky="ew", padx=5)
+        self.folder_combo = folder_combo  # Save reference for later
+
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.grid(row=2, column=0, columnspan=2, pady=5)
+
+        ttk.Button(btn_frame, text="Load Outlook Folders", command=self.load_outlook_folders).grid(row=0, column=0, padx=5)
+        ttk.Button(btn_frame, text="Extract Emails", command=self.extract_emails).grid(row=0, column=1, padx=5)
+        ttk.Button(btn_frame, text="Export to Excel", command=self.export_to_excel).grid(row=0, column=2, padx=5)
+        ttk.Button(btn_frame, text="Clear Results", command=self.clear_results).grid(row=0, column=3, padx=5)
+
+        # Setup Treeview to show emails
+        self.tree = ttk.Treeview(main_frame, columns=("TradeID", "Subject", "Sender", "Date"), show="headings")
+        self.tree.heading("TradeID", text="Trade ID")
+        self.tree.heading("Subject", text="Subject")
+        self.tree.heading("Sender", text="Sender")
+        self.tree.heading("Date", text="Date")
+        self.tree.column("TradeID", width=100)
+        self.tree.column("Subject", width=400)
+        self.tree.column("Sender", width=200)
+        self.tree.column("Date", width=130)
+        self.tree.grid(row=3, column=0, columnspan=2, sticky="nsew", pady=5)
+
+        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=self.tree.yview)
+        scrollbar.grid(row=3, column=2, sticky="ns")
+        self.tree.configure(yscrollcommand=scrollbar.set)
+
+        # Email content display
+        ttk.Label(main_frame, text="Email Content:").grid(row=4, column=0, sticky="nw", pady=5)
+        self.email_content = scrolledtext.ScrolledText(main_frame, height=15, width=100)
+        self.email_content.grid(row=5, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
+
+        self.tree.bind("<<TreeviewSelect>>", self.on_email_select)
+
+        self.emails = []  # Will store dict: {trade_id: ..., emails: [...]}
+
+    def load_outlook_folders(self):
+        try:
+            outlook = win32com.client.Dispatch("Outlook.Application")
+            ns = outlook.GetNamespace("MAPI")
+            folders = [ns.Folders.Item(i+1).Name for i in range(ns.Folders.Count)]
+            self.folder_combo['values'] = folders
+            if folders:
+                self.folder_combo.current(0)
+            messagebox.showinfo("Success", "Outlook folders loaded!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load Outlook folders:\n{e}")
+
+    def connect_to_outlook(self):
+        try:
+            outlook = win32com.client.Dispatch("Outlook.Application")
+            ns = outlook.GetNamespace("MAPI")
+            folder_name = self.folder_var.get()
+            folder = None
+            for i in range(ns.Folders.Count):
+                f = ns.Folders.Item(i+1)
+                if f.Name == folder_name:
+                    folder = f
+                    break
+            if folder is None:
+                messagebox.showerror("Error", f"Outlook folder '{folder_name}' not found.")
+            return folder
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to connect to Outlook:\n{e}")
+            return None
+
+    def extract_emails(self):
+        trade_ids_str = self.trade_ids_var.get().strip()
+        if not trade_ids_str:
+            messagebox.showwarning("Input Error", "Please enter at least one Trade ID.")
+            return
+
+        trade_ids = [tid.strip() for tid in re.split(",|\\s", trade_ids_str) if tid.strip()]
+        folder = self.connect_to_outlook()
+        if not folder:
+            return
+
+        self.emails.clear()
+        self.clear_results()
+
+        try:
+            items = folder.Items
+            items.Sort("[ReceivedTime]", True)
+
+            all_emails = []
+
+            # For each Trade ID, gather emails and tag them
+            for trade_id in trade_ids:
+                matched = []
+                for item in items:
+                    if item.Class == 43:
+                        subject = item.Subject or ""
+                        body = item.Body or ""
+                        html_body = ""
+                        try:
+                            html_body = item.HTMLBody
+                        except:
+                            pass
+
+                        if trade_id in subject or trade_id in body or (html_body and trade_id in html_body):
+
+                            content_text = body if body else (BeautifulSoup(html_body, "html.parser").get_text("\n") if html_body else "")
+
+                            matched.append({
+                                "trade_id": trade_id,
+                                "subject": subject,
+                                "sender": item.SenderName if hasattr(item, "SenderName") else "",
+                                "date": item.ReceivedTime.strftime("%Y-%m-%d %H:%M:%S") if hasattr(item, "ReceivedTime") else "",
+                                "body": content_text,
+                                "html_body": html_body
+                            })
+                self.emails.append({"trade_id": trade_id, "emails": matched})
+                all_emails.extend(matched)
+
+            # populate tree with all emails regardless of trade id with trade id column
+            for idx, mail in enumerate(all_emails):
+                self.tree.insert("", "end", iid=str(idx), values=(
+                    mail["trade_id"],
+                    mail["subject"][:60] + "..." if len(mail["subject"]) > 60 else mail["subject"],
+                    mail["sender"][:30],
+                    mail["date"]
+                ))
+
+            messagebox.showinfo("Success", f"Loaded {len(all_emails)} emails across {len(trade_ids)} Trade IDs.")
+        except Exception as e:
+            messagebox.showerror("Extraction Error", f"Failed to extract emails:\n{e}")
+
+    def on_email_select(self, event):
+        selection = self.tree.selection()
+        if not selection:
+            return
+        index = int(selection[0])
+        total_emails = sum(len(group["emails"]) for group in self.emails)
+        if index >= total_emails:
+            return
+
+        # Locate which trade_id group and email
+        counter = 0
+        selected_email = None
+        for group in self.emails:
+            if index < counter + len(group["emails"]):
+                selected_email = group["emails"][index - counter]
+                break
+            counter += len(group["emails"])
+
+        if selected_email:
+            content = f"Trade ID: {selected_email['trade_id']}\nFrom: {selected_email['sender']}\nDate: {selected_email['date']}\nSubject: {selected_email['subject']}\n\n{selected_email['body']}"
+            self.email_content.delete("1.0", tk.END)
+            self.email_content.insert(tk.END, content)
+
+    def clear_results(self):
+        self.tree.delete(*self.tree.get_children())
+        self.email_content.delete("1.0", tk.END)
+
+    def export_to_excel(self):
+        if not self.emails:
+            messagebox.showwarning("No Data", "No emails to export")
+            return
+
+        try:
+            import openpyxl
+        except ImportError:
+            messagebox.showerror("Missing Package", "Please install openpyxl: pip install openpyxl")
+            return
+
+        filename = filedialog.asksaveasfilename(
+            title="Save Excel File",
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
+        if not filename:
+            return
+
+        try:
+            with pd.ExcelWriter(filename, engine="openpyxl") as writer:
+                for group in self.emails:
+                    trade_id = group["trade_id"]
+                    emails = group["emails"]
+                    if not emails:
+                        continue
+                    df = pd.DataFrame(emails)
+                    sheet_name = trade_id[:31]  # Excel sheet name max length 31
+                    df.to_excel(writer, sheet_name=sheet_name, index=False)
+            messagebox.showinfo("Exported", f"Emails exported successfully to {filename}")
+        except Exception as ex:
+            messagebox.showerror("Export Error", f"Failed to export Excel:\n{ex}")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = EmailEntityExtractor(root)
+    root.mainloop()
