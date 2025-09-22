@@ -44,3 +44,7 @@ def extract_with_patterns(self, text, patterns):
             else:
                 results.append(m)
     return results
+
+
+trade_ids = [tid.strip() for tid in re.split(",|\\s", trade_ids_str) if tid.strip()]
+
