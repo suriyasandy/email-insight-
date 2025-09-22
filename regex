@@ -48,3 +48,24 @@ def extract_with_patterns(self, text, patterns):
 
 trade_ids = [tid.strip() for tid in re.split(",|\\s", trade_ids_str) if tid.strip()]
 
+
+
+import pandas as pd
+
+# columns you want
+selected_columns = ["CustomerID", "Name"]
+
+records = []
+for table in all_tables:
+    # turn rows (list of lists) into a dictionary
+    row_dict = {row[0]: row[1] for row in table["rows"]}
+    # pick only selected columns
+    filtered_row = {col: row_dict.get(col) for col in selected_columns}
+    filtered_row["Table"] = table["Table"]  # add table name
+    records.append(filtered_row)
+
+# build final dataframe
+df = pd.DataFrame(records)
+
+print(df)
+
