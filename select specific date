@@ -1,0 +1,16 @@
+import datetime
+
+# Get today's and yesterday's dates
+today = datetime.datetime.now()
+yesterday = today - datetime.timedelta(days=1)
+
+# Format in Outlook restriction format (mm/dd/yyyy)
+today_str = today.strftime("%m/%d/%Y")
+yesterday_str = yesterday.strftime("%m/%d/%Y")
+
+# Restrict items to only those received today or yesterday
+filter_str = f"[ReceivedTime] >= '{yesterday_str} 00:00 AM' AND [ReceivedTime] <= '{today_str} 11:59 PM'"
+items = folder.Items.Restrict(filter_str)
+
+# Sort by ReceivedTime descending
+items.Sort("[ReceivedTime]", True)
