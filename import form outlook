@@ -1,0 +1,64 @@
+ttk.Button(button_frame, text="Import from Outlook", command=self.import_from_outlook).pack(side=tk.LEFT, padx=5)
+
+
+def import_from_outlook(self):
+    try:
+        import win32com.client
+        outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+        # Get all folders at the root
+        folder_names = [(i, outlook.Folders[i].Name) for i in range(outlook.Folders.Count)]
+        selected_folder_index = None
+
+        # Simple folder (Inbox) selection dialog (or use always Inbox)
+        from tkinter.simpledialog import askstring
+        folder_name = askstring("Select Folder", "Enter Outlook folder name (e.g. Inbox):")
+        if not folder_name:
+            return
+        folder = None
+        for i in range(outlook.Folders.Count):
+            if outlook.Folders[i+1].Name == folder_name:
+                folder = outlook.Folders[i+1]
+                break
+        if folder is None:
+            messagebox.showerror("Folder Not Found", f"No such folder: {folder_name}")
+            return
+
+        messages = folder.Items
+        self.emails = []
+        for item in messages:
+            try:
+                if hasattr(item, "Body"):  # Ensure it's a mail item
+                    subject = item.Subject or ""
+                    body = item.Body or ""
+                    html_body = ""
+                    try:
+                        html_body = item.HTMLBody
+                    except:
+                        pass
+                    sender = str(item.Sender) if hasattr(item, "Sender") else ""
+                    recipient = str(item.To) if hasattr(item, "To") else ""
+                    date = item.ReceivedTime.strftime("%Y-%m-%d %H:%M:%S") if hasattr(item, "ReceivedTime") else ""
+                    self.emails.append({
+                        'subject': subject,
+                        'sender': sender,
+                        'recipient': recipient,
+                        'date': date,
+                        'body': body,
+                        'html_body': html_body,
+                    })
+            except Exception as e:
+                print(f"Failed to process an Outlook mail: {e}")
+
+        self.clear_results()
+        self.sort_emails_by_date()
+        for i, email_data in enumerate(self.emails):
+            self.tree.insert('', 'end', iid=str(i), values=(
+                email_data['subject'][:30] + "..." if len(email_data['subject']) > 30 else email_data['subject'],
+                email_data['sender'][:20] + "..." if len(email_data['sender']) > 20 else email_data['sender'],
+                email_data['recipient'][:20] + "..." if len(email_data['recipient']) > 20 else email_data['recipient'],
+                email_data['date'],
+                f"Outlook {i}"
+            ))
+        messagebox.showinfo("Import Success", f"Imported {len(self.emails)} emails from Outlook {folder_name}")
+    except Exception as e:
+        messagebox.showerror("Outlook Error", f"Error connecting or importing from Outlook\n{e}")
