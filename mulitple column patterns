@@ -1,0 +1,25 @@
+# primary and fallback selected columns
+selected_columns_primary = ["RoRWA", "Sales VA", "Spot RWAs", "Average RWAs",
+                            "CVA Fee Amount", "FVA Fee Amount", 
+                            "RCVA Fee Amount", "Internal Fee Amount"]
+
+selected_columns_fallback = ["Alt RoRWA", "Alt Sales", "Alt Spot", "Alt Average",
+                             "Alt CVA", "Alt FVA", "Alt RCVA", "Alt Internal"]
+
+# pick which list to use depending on availability
+def choose_columns(row_dict, primary, fallback):
+    # Check which primary columns are available
+    available_primary = [col for col in primary if col in row_dict]
+    if available_primary:  # if at least one primary col is found
+        return available_primary
+    else:
+        # fall back
+        return [col for col in fallback if col in row_dict]
+
+# inside your loop:
+filtered_row = {col: row_dict.get(col) for col in choose_columns(row_dict, selected_columns_primary, selected_columns_fallback)}
+records.append(filtered_row)
+
+# final dataframe
+final_columns = choose_columns(row_dict, selected_columns_primary, selected_columns_fallback)
+table_df = pd.DataFrame(records, columns=final_columns)
