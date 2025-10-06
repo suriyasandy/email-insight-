@@ -1,0 +1,10 @@
+import os
+from datetime import datetime
+
+# Get current date as YYYY-MM-DD
+current_date = datetime.now().strftime("%Y-%m-%d")  # Or use another format like "%Y%m%d" if you want 20251006
+dir_path = os.path.join("Results", current_date)
+
+os.makedirs(dir_path, exist_ok=True)
+
+print(f"Directory created: {dir_path}")
