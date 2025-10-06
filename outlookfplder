@@ -1,0 +1,21 @@
+import win32com.client
+
+def get_subfolders_dict(folder):
+    subfolders_dict = {}
+    subfolders = []
+    for i in range(1, folder.Folders.Count + 1):
+        subfolder = folder.Folders.Item(i)
+        subfolders.append(subfolder.Name)
+        # Recursively add subfolders of this subfolder
+        subfolders_dict.update(get_subfolders_dict(subfolder))
+    subfolders_dict[folder.Name] = subfolders
+    return subfolders_dict
+
+outlook = win32com.client.Dispatch("Outlook.Application")
+mapi = outlook.GetNamespace("MAPI")
+root_folder = mapi.Folders.Item(1)  # Access the first root folder, or use folder name
+
+folder_dict = get_subfolders_dict(root_folder)
+
+for key, value in folder_dict.items():
+    print(f"Folder: {key}, Subfolders: {value}")
