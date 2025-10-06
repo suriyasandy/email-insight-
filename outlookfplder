@@ -1,21 +1,47 @@
 import win32com.client
+import tkinter as tk
+from tkinter import ttk
 
-def get_subfolders_dict(folder):
-    subfolders_dict = {}
-    subfolders = []
-    for i in range(1, folder.Folders.Count + 1):
-        subfolder = folder.Folders.Item(i)
-        subfolders.append(subfolder.Name)
-        # Recursively add subfolders of this subfolder
-        subfolders_dict.update(get_subfolders_dict(subfolder))
-    subfolders_dict[folder.Name] = subfolders
-    return subfolders_dict
+def get_mailboxes():
+    outlook = win32com.client.Dispatch("Outlook.Application")
+    mapi = outlook.GetNamespace("MAPI")
+    mailboxes = []
+    for i in range(1, mapi.Folders.Count + 1):
+        mailboxes.append(mapi.Folders.Item(i).Name)
+    return mailboxes
 
-outlook = win32com.client.Dispatch("Outlook.Application")
-mapi = outlook.GetNamespace("MAPI")
-root_folder = mapi.Folders.Item(1)  # Access the first root folder, or use folder name
+def get_subfolders(mailbox_name):
+    outlook = win32com.client.Dispatch("Outlook.Application")
+    mapi = outlook.GetNamespace("MAPI")
+    for i in range(1, mapi.Folders.Count + 1):
+        folder = mapi.Folders.Item(i)
+        if folder.Name == mailbox_name:
+            return [folder.Folders.Item(j).Name for j in range(1, folder.Folders.Count + 1)]
+    return []
 
-folder_dict = get_subfolders_dict(root_folder)
+def on_mailbox_select(event):
+    selected_mailbox = mailbox_combo.get()
+    subfolders = get_subfolders(selected_mailbox)
+    folder_combo['values'] = subfolders
+    if subfolders:
+        folder_combo.current(0)
+    else:
+        folder_combo.set('')
 
-for key, value in folder_dict.items():
-    print(f"Folder: {key}, Subfolders: {value}")
+# Set up the Tkinter UI
+root = tk.Tk()
+root.title("Outlook Mailbox and Folder Selection")
+root.geometry("400x150")
+
+# Mailbox dropdown
+tk.Label(root, text="Select Mailbox:").pack(pady=(10,0))
+mailbox_combo = ttk.Combobox(root, values=get_mailboxes(), state="readonly")
+mailbox_combo.pack()
+mailbox_combo.bind("<<ComboboxSelected>>", on_mailbox_select)
+
+# Folder dropdown
+tk.Label(root, text="Select Folder:").pack(pady=(10,0))
+folder_combo = ttk.Combobox(root, values=[], state="readonly")
+folder_combo.pack()
+
+root.mainloop()
