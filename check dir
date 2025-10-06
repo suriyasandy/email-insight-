@@ -8,3 +8,21 @@ dir_path = os.path.join("Results", current_date)
 os.makedirs(dir_path, exist_ok=True)
 
 print(f"Directory created: {dir_path}")
+
+
+
+
+import os
+from datetime import datetime
+
+today = datetime.today()
+dir_path = os.path.join(
+    "Results",
+    str(today.year),
+    str(today.month).zfill(2),  # Ensures month is two digits
+    str(today.day).zfill(2)     # Ensures day is two digits
+)
+
+os.makedirs(dir_path, exist_ok=True)
+print(f"Directory created: {dir_path}")
+
