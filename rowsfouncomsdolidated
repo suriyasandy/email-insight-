@@ -8,23 +8,26 @@ for file in csv_files:
         csv_headers = list(reader.fieldnames) if reader.fieldnames else []
         expected_headers = static_headers[1:]
 
-        if csv_headers == expected_headers:
-            # All headers match, append rows normally
+        # Headers from index 16 onward in static_headers
+        required_sub_headers = static_headers[16:]
+
+        # Check if required sub headers exist in csv headers
+        if all(header in csv_headers for header in required_sub_headers):
+            # Append data rows as normal if all required headers exist
             for row in reader:
                 out_row = [trade_id]
                 for header in expected_headers:
                     out_row.append(row.get(header, ""))
                 ws.append(out_row)
                 rows_found = True
-        elif "Date" in csv_headers:
-            # Date present but headers not fully matching - append comment
-            out_row = [trade_id] + [""] * (len(static_headers) - 1)
-            ws.append(out_row)
-            ws.append([f"Partial header mismatch - Check file: {base_name}"])
-            rows_found = True
         else:
-            # No Date column found - Trade Id not found message
+            # Headers missing from index 16 onward - append partial comment
             out_row = [trade_id] + [""] * (len(static_headers) - 1)
             ws.append(out_row)
-            ws.append([f"Trade Id Not Found In Mail - Check file: {base_name}"])
+            ws.append([f"Partial header mismatch from index 16 onward - Check file: {base_name}"])
+            rows_found = True
 
+    if not rows_found:
+        out_row = [trade_id] + [""] * (len(static_headers) - 1)
+        ws.append(out_row)
+        ws.append([f"Trade Id Not Found In Mail - Check file: {base_name}"])
