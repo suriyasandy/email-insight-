@@ -1,0 +1,11 @@
+from datetime import datetime, timedelta
+
+# Get today and generate the list of past 12 days (or as needed)
+today = datetime.now()
+dates = [today - timedelta(days=i) for i in range(12)]
+
+# Only keep those which are weekdays (Monday=0, ..., Sunday=6)
+weekdays = [date for date in dates if date.weekday() < 5]  # 0-4 are Mon-Fri
+
+# Convert to string format for Outlook restriction
+weekday_strs = [date.strftime("%m/%d/%Y") for date in weekdays]
