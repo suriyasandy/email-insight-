@@ -1,14 +1,28 @@
-rows_found = False
-with open(file, newline="", encoding="utf-8") as f:
-    reader = csv.DictReader(f)
-    for row in reader:
-        out_row = [trade_id]
-        for header in static_headers[1:]:
-            out_row.append(row.get(header, ""))
-        ws.append(out_row)
-        rows_found = True
+for file in csv_files:
+    base_name = file.replace("\\", "/").split("/")[-1].replace(".csv", "")
+    trade_id = base_name.split("_")[0]
+    rows_found = False
 
-# If no data rows found, still write the trade_id (with empty columns)
-if not rows_found:
-    out_row = [trade_id] + [""] * (len(static_headers) - 1)
-    ws.append(out_row)
+    with open(file, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        csv_headers = list(reader.fieldnames) if reader.fieldnames else []
+        expected_headers = static_headers[1:]
+
+        if csv_headers == expected_headers:
+            for row in reader:
+                out_row = [trade_id]
+                for header in expected_headers:
+                    out_row.append(row.get(header, ""))
+                ws.append(out_row)
+                rows_found = True
+        else:
+            # header mismatch - append comment to check the file
+            out_row = [trade_id] + [""] * (len(static_headers) - 1)
+            ws.append(out_row)
+            ws.append([f"Header mismatch for Trade ID: {trade_id} - check {file}"])
+            rows_found = True
+
+    if not rows_found:
+        out_row = [trade_id] + [""] * (len(static_headers) - 1)
+        ws.append(out_row)
+        ws.append([f"Trade Id Not Found In Mail - check {file}"])
