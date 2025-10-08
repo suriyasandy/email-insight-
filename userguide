@@ -1,0 +1,25 @@
+Step-by-step Usage Guide
+1.	Select Mailbox and Folder
+•	Choose the desired mailbox from the dropdown menu.[amazonaws]
+•	Select the relevant Outlook folder, such as Outbox, from the folder dropdown.[amazonaws]
+2.	Upload Trade ID File or Enter Trade ID
+•	For multiple trade IDs: Click “Browse” and upload a file containing trade IDs separated by commas; do not enter IDs in the input field directly.[amazonaws]
+•	For a single trade ID: Type the trade ID into the “Trade ID” text field; do not use the input box reserved for file uploads.[amazonaws]
+3.	Extract Emails
+•	Click the “Extract from Outlook” button after selecting mailbox, folder, and trade IDs.[amazonaws]
+•	Emails containing the specified trade IDs in their subject will be listed in the Email Chain grid below.[amazonaws]
+4.	View and Extract Entities from Email
+•	Click on any email row to preview its content in the dialog box at the bottom of the window.[amazonaws]
+•	To extract relevant data entities from the email, click “Extract Entities”.[amazonaws]
+5.	Export Individual Results to CSV
+•	After extracting entities for a selected email, click “Export to CSV” for individual mail data export.[amazonaws]
+•	Repeat the “Extract Entities” and “Export to CSV” for each email as needed.[amazonaws]
+6.	Consolidate Results
+•	When ready to combine all extracted results, click “Consolidated Results” to generate a merged CSV report for the selected trades and mails.[amazonaws]
+7.	Start New Extraction
+•	Click “Clear Results” to reset the interface before starting with a new trade or mail extraction.[amazonaws]
+•	Select and upload a new trade ID input file as needed for the next batch.[amazonaws]
+Important Notes
+•	Trade ID Entry: Trade IDs should never be entered in the “Trade ID input box”; use the file upload feature for multiples, or the dedicated “Trade ID” field for single entries.[amazonaws]
+•	Extraction Workflow: Each extraction and export must be performed per email, followed by consolidation if needed for summarizing all results.[amazonaws]
+•	Clear Before New Batch: Always use “Clear Results” before loading a new set of trades to avoid mix-ups in results.[amazonaws]
