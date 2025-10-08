@@ -1,0 +1,30 @@
+def connect_to_outlook(self):
+    try:
+        import win32com.client
+        outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+        mailbox_name = self.mailbox_combo.get()
+        folder_name = self.folder_var.get()
+        # Find the mailbox by name
+        mailbox = None
+        for i in range(outlook.Folders.Count):
+            m = outlook.Folders.Item(i+1)
+            if m.Name == mailbox_name:
+                mailbox = m
+                break
+        if mailbox is None:
+            messagebox.showerror("Select Mailbox", "Selected mailbox not found!")
+            return None
+        # Now get the folder in that mailbox
+        folder = None
+        for j in range(mailbox.Folders.Count):
+            f = mailbox.Folders.Item(j+1)
+            if f.Name == folder_name:
+                folder = f
+                break
+        if folder is None:
+            messagebox.showerror("Select Folder", f"Folder '{folder_name}' not found in '{mailbox_name}'!")
+            return None
+        return folder
+    except Exception as e:
+        messagebox.showerror("Outlook Connection Error", f"Failed to connect to Outlook: {e}")
+        return None
