@@ -1,0 +1,34 @@
+
+Title:
+Deliver Business-Ready Email Extraction and Trade Data Reporting Tool
+
+Type:
+Business Requirement / Story
+
+Description:
+As part of ongoing compliance, analytics, and operations, we need a robust solution allowing business users to extract, consolidate, and report trade-related data directly from Outlook emails and .msg files with minimal technical effort. The tool must support regulatory reporting, internal audits, productivity improvement, and process transparency for multiple teams.
+
+Business Objectives:
+- Eliminate manual copy-paste or risk-prone bulk processing—reduce effort and errors in extracting trade data from email content.
+- Enable end-users in operations, compliance, and surveillance to quickly retrieve structured trade info from both their mailboxes and legacy MSG files, regardless of email volume.
+- Support multiple trade IDs or patterns per batch to minimize repeated effort.
+- Provide central export for reporting, sharing, or further reconciliation with downstream applications.
+
+Key Business Acceptance Criteria:
+- User can “point and click” to select Outlook folder or upload files, enter multiple trade IDs, and see all relevant emails and extracted data without technical knowledge.
+- Extraction is repeatable and reliable, matching regulatory requirements for completeness, auditability, and minimizing false positives/negatives.
+- All extracted results (trade IDs, key deal info, matched tables) can be exported to a single file and handed off to compliance, audit, or analytics teams.
+- Solution is easy to deploy and maintain: runs on standard Windows workstations, does not require IT intervention for every user, and can accommodate process/requirement changes.
+
+KPIs/Value:
+- Reduce hours spent on manual email retrieval and reporting by 80%+.
+- Decrease compliance/audit cycles and exceptions from missed data.
+- Increase speed and reliability of business/ops responses to regulatory queries.
+
+Out-of-Scope:
+- Integration with non-Outlook email systems and cloud email at this phase.
+- Fully automated workflow/batch unattended operation (phase 2).
+
+Notes:
+- The solution must be thoroughly user-tested before business rollout.
+- Documentation, user guide, and business change support should accompany delivery.
