@@ -1,48 +1,168 @@
 from datetime import datetime, timedelta
+import locale
 
-def detect_outlook_datetime_format(sample_item):
-    # Sample: item.ReceivedTime could look like 'Thu 10/9/2025 12:55 PM' (US, 12h) or '06/10/2025 19:23' (international, 24h)
-    dt_string = str(sample_item.ReceivedTime)
-    # Try to distinguish by looking for AM/PM and format markers
-    if "AM" in dt_string or "PM" in dt_string:
-        # US format: MM/DD/YYYY 12h clock
-        return "%m/%d/%Y", "12"  # 12-hour
-    elif ":" in dt_string and len(dt_string.split(":")[0].split("/")) == 3:
-        # International
-        return "%d/%m/%Y", "24"  # 24-hour
-    # Fallback: assume US
-    return "%m/%d/%Y", "12"
-
-def get_outlook_filtered_items(folder):
+def get_robust_outlook_items(folder, days_back=12):
+    """
+    Robust email fetching with multiple fallback strategies
+    """
     today = datetime.now()
-    dates = [today - timedelta(days=i) for i in range(12)]
-    weekdays = [d for d in dates if d.weekday() < 5]
-
     all_items = []
-    # First, get one sample item to auto-detect format
-    items = folder.Items
-    items.Sort("[ReceivedTime]", True)
+    
     try:
-        sample_item = items[0]
-    except Exception:
-        print("No sample emails found in folder!")
+        # Strategy 1: Simple wide range (most reliable)
+        start_date = today - timedelta(days=days_back)
+        
+        # Try both US and international formats
+        formats_to_try = [
+            (start_date.strftime('%m/%d/%Y'), today.strftime('%m/%d/%Y'), '12:00:00 AM', '11:59:59 PM'),  # US format
+            (start_date.strftime('%d/%m/%Y'), today.strftime('%d/%m/%Y'), '00:00:00', '23:59:59')           # International format
+        ]
+        
+        for start_str, end_str, start_time_suffix, end_time_suffix in formats_to_try:
+            try:
+                filter_str = f"[ReceivedTime] >= '{start_str} {start_time_suffix}' AND [ReceivedTime] <= '{end_str} {end_time_suffix}'"
+                print(f"Trying wide range filter: {filter_str}")
+                items = folder.Items.Restrict(filter_str)
+                items_list = list(items)
+                if len(items_list) > 0:
+                    print(f"Success with wide range: {len(items_list)} emails found")
+                    return items_list
+            except Exception as e:
+                print(f"Wide range failed with format {start_str}: {e}")
+                continue
+        
+        # Strategy 2: Your original OR logic (fallback)
+        print("Trying original OR logic...")
+        dates = [today - timedelta(days=i) for i in range(days_back)]
+        weekdays = [d for d in dates if d.weekday() < 5]
+        
+        # Try US format first
+        weekday_strs = [date.strftime('%m/%d/%Y') for date in weekdays]
+        filters = [f"[ReceivedTime] >= '{date_str} 12:00:00 AM' AND [ReceivedTime] <= '{date_str} 11:59:59 PM'" for date_str in weekday_strs]
+        filter_str = " OR ".join(filters)
+        
+        try:
+            items = folder.Items.Restrict(filter_str)
+            items_list = list(items)
+            if len(items_list) > 0:
+                print(f"Success with OR logic (US): {len(items_list)} emails found")
+                return items_list
+        except Exception as e:
+            print(f"OR logic (US format) failed: {e}")
+        
+        # Try international format
+        weekday_strs = [date.strftime('%d/%m/%Y') for date in weekdays]
+        filters = [f"[ReceivedTime] >= '{date_str} 00:00:00' AND [ReceivedTime] <= '{date_str} 23:59:59'" for date_str in weekday_strs]
+        filter_str = " OR ".join(filters)
+        
+        try:
+            items = folder.Items.Restrict(filter_str)
+            items_list = list(items)
+            if len(items_list) > 0:
+                print(f"Success with OR logic (International): {len(items_list)} emails found")
+                return items_list
+        except Exception as e:
+            print(f"OR logic (International format) failed: {e}")
+        
+        # Strategy 3: No filter, just get recent emails and filter in Python
+        print("Falling back to no-filter approach...")
+        items = folder.Items
+        items.Sort("[ReceivedTime]", True)
+        cutoff_date = today - timedelta(days=days_back)
+        
+        recent_items = []
+        for item in items:
+            try:
+                if item.ReceivedTime >= cutoff_date:
+                    recent_items.append(item)
+                if len(recent_items) >= 1000:  # Limit to prevent memory issues
+                    break
+            except:
+                continue
+        
+        print(f"No-filter approach found: {len(recent_items)} emails")
+        return recent_items
+        
+    except Exception as e:
+        print(f"All strategies failed: {e}")
         return []
 
-    date_fmt, clock_type = detect_outlook_datetime_format(sample_item)
-    print(f"Detected format: {date_fmt}, clock: {clock_type}-hour")
+# Replace your existing date filter logic with this:
+def extract_email_chain_from_outlook(self):
+    # Your existing validation code...
+    trade_ids_str = self.trade_ids_var.get().strip() if hasattr(self, "trade_ids_var") else None
+    if not trade_ids_str:
+        # Your existing file processing logic...
+        pass
+    
+    trade_ids = [tid.strip() for tid in re.split(",|\\s", trade_ids_str) if tid.strip()]
+    folder = self.connect_to_outlook()
+    if not folder:
+        return
 
-    for date in weekdays:
-        date_str = date.strftime(date_fmt)
-        if clock_type == "12":
-            start_time = f"{date_str} 12:00:00 AM"
-            end_time = f"{date_str} 11:59:59 PM"
-        else:
-            start_time = f"{date_str} 00:00:00"
-            end_time = f"{date_str} 23:59:59"
-        filter_str = f"[ReceivedTime] >= '{start_time}' AND [ReceivedTime] <= '{end_time}'"
-        print("Using filter:", filter_str)
-        items = folder.Items.Restrict(filter_str)
-        for item in items:
-            all_items.append(item)
-    print("Total fetched emails:", len(all_items))
-    return all_items
+    self.progress.start()
+    self.clear_results()
+    self.emails = []
+    self.unfound_trades = []
+
+    try:
+        # Use the robust fetching method
+        all_items = get_robust_outlook_items(folder, days_back=12)
+        
+        # Now process items for trade IDs (your existing logic)
+        for trade_id in trade_ids:
+            matched = []
+            for item in all_items:
+                if item.Class == 43:
+                    subject = item.Subject or ""
+                    body = item.Body or ""
+                    html_body = ""
+                    try:
+                        html_body = item.HTMLBody
+                    except:
+                        pass
+                    
+                    if trade_id in subject or trade_id in body or (html_body and trade_id in html_body):
+                        content_text = body if body else (BeautifulSoup(html_body, "html.parser").get_text("\n") if html_body else "")
+                        matched.append({
+                            'trade_id': trade_id,
+                            'subject': subject,
+                            'sender': item.SenderName if hasattr(item, "SenderName") else "",
+                            'recipient': item.To if hasattr(item, "To") else "",
+                            'date': item.ReceivedTime.strftime("%Y-%m-%d %H:%M:%S") if hasattr(item, "ReceivedTime") else "",
+                            'body': content_text,
+                            'html_body': html_body
+                        })
+            
+            self.emails.extend(matched)
+            if not matched:
+                self.unfound_trades.append(trade_id)
+
+        # Sort and populate tree (your existing logic)
+        self.emails.sort(key=lambda x: datetime.strptime(x['date'], "%Y-%m-%d %H:%M:%S"), reverse=True)
+        
+        for i, email_data in enumerate(self.emails):
+            email_type = "Original"
+            if i > 0:
+                subj = email_data['subject'].lower()
+                if "re:" in subj:
+                    email_type = f"Reply {i}"
+                elif "fw:" in subj or "fwd:" in subj:
+                    email_type = f"Forward {i}"
+                else:
+                    email_type = f"Email {i}"
+            
+            self.tree.insert('', 'end', iid=str(i), values=(
+                email_data['subject'][:60] + "..." if len(email_data['subject']) > 60 else email_data['subject'],
+                email_data['sender'][:20],
+                email_data['recipient'][:20],
+                email_data['date'],
+                email_type
+            ))
+
+        messagebox.showinfo("Success", f"Found {len(self.emails)} emails across {len(trade_ids)} Trade IDs.")
+        
+    except Exception as e:
+        messagebox.showerror("Extraction Error", f"Failed to extract emails: {e}")
+    finally:
+        self.progress.stop()
