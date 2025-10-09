@@ -1,0 +1,110 @@
+import re
+import time
+from datetime import datetime, timedelta
+
+def get_locale_outlook_fmt():
+    dt = datetime(2025, 10, 9, 17, 36, 0)
+    raw_date = dt.strftime('%x')
+    raw_time = dt.strftime('%X')
+    ampm = dt.replace(hour=1).strftime('%p')
+    is_12h = ('AM' in ampm) or ('PM' in ampm) or ('am' in ampm) or ('pm' in ampm)
+    if '/' in raw_date:
+        parts = raw_date.split('/')
+        if int(parts[0]) > 12:
+            date_fmt = '%d/%m/%Y'
+        elif int(parts[1]) > 12:
+            date_fmt = '%m/%d/%Y'
+        else:
+            date_fmt = '%m/%d/%Y'
+    elif '-' in raw_date:
+        parts = raw_date.split('-')
+        if len(parts[0]) == 4:
+            date_fmt = '%Y-%m-%d'
+        else:
+            date_fmt = '%d-%m-%Y'
+    elif '.' in raw_date:
+        parts = raw_date.split('.')
+        if len(parts[0]) == 4:
+            date_fmt = '%Y.%m.%d'
+        else:
+            date_fmt = '%d.%m.%Y'
+    else:
+        date_fmt = '%m/%d/%Y'
+
+    if is_12h:
+        am = dt.replace(hour=1).strftime('%p')
+        pm = dt.replace(hour=13).strftime('%p')
+        time_fmt = '%I:%M:%S'
+        use_ampm = True
+    else:
+        am = pm = ''
+        time_fmt = '%H:%M:%S'
+        use_ampm = False
+    return date_fmt, time_fmt, am, pm, use_ampm
+
+def extract_email_chain_from_outlook(self):
+    trade_ids_str = None
+    df = pd.DataFrame(columns=self.selected_columns)
+    if hasattr(self, "trade_ids_var") or isinstance(self.trade_ids_var, tk.StringVar):
+        trade_ids_str = self.trade_ids_var.get().strip()
+    if not trade_ids_str:
+        file_path = self.file_path_var.get().strip()
+        if not file_path or not os.path.exists(file_path):
+            messagebox.showwarning("Input Error", "Please upload a valid file/input trade_id")
+            return
+        self.trade_ids_var.set(self.process_trade_file(file_path))
+        trade_ids_str = self.trade_ids_var.get().strip()
+
+    trade_ids = [tid.strip() for tid in re.split(",|\\s", trade_ids_str) if tid.strip()]
+    folder = self.connect_to_outlook()
+    if not folder:
+        return
+
+    self.progress.start()
+    self.clear_results()
+    self.emails = []
+    self.unfound_trades = []
+
+    try:
+        today = datetime.now()
+        days_back = 3  # or your preferred value
+
+        # --- Locale/time format detection ---
+        date_fmt, time_fmt, am, pm, use_ampm = get_locale_outlook_fmt()
+        print(f"Locale: {date_fmt} {time_fmt} | use_ampm: {use_ampm}, AM: {am}, PM: {pm}")
+
+        pattern = re.compile("|".join(re.escape(tid) for tid in trade_ids))
+        all_items = []
+        for days_ago in range(1, days_back + 1):
+            the_date = today - timedelta(days=days_ago)
+            date_str = the_date.strftime(date_fmt)
+            if use_ampm:
+                start_time = f"{date_str} 12:00:00 {am}"
+                end_time = f"{date_str} 11:59:59 {pm}"
+            else:
+                start_time = f"{date_str} 00:00:00"
+                end_time = f"{date_str} 23:59:59"
+            filter_str = f"[ReceivedTime] >= '{start_time}' AND [ReceivedTime] <= '{end_time}'"
+            print(f"Trying: {filter_str}")
+            items = folder.Items.Restrict(filter_str)
+            items_list = list(items)
+            # fallback for case mis-match
+            if not items_list and use_ampm:
+                start_time_l = f"{date_str} 12:00:00 {am.lower()}"
+                end_time_l = f"{date_str} 11:59:59 {pm.lower()}"
+                filter_str_l = f"[ReceivedTime] >= '{start_time_l}' AND [ReceivedTime] <= '{end_time_l}'"
+                items = folder.Items.Restrict(filter_str_l)
+                items_list = list(items)
+            if items_list:
+                print(f"Got {len(items_list)} items for {date_str}")
+                all_items.extend(items_list)
+            else:
+                print(f"No items for {date_str}")
+
+        # ... Your trade ID and email matching logic goes here, unchanged ...
+        # (As per your screenshot, process items, append to self.emails, etc.)
+
+    except Exception as e:
+        messagebox.showerror("Extraction Error", f"Failed to extract emails: {e}")
+    finally:
+        self.progress.stop()
