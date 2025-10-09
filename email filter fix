@@ -1,90 +1,77 @@
 import re
-import time
 from datetime import datetime, timedelta
 
-def get_locale_outlook_fmt():
-    dt = datetime(2025, 10, 9, 17, 36, 0)
-    raw_date = dt.strftime('%x')
-    raw_time = dt.strftime('%X')
+def get_receivedtime_format_from_item(item):
+    """
+    Infers the exact string format for the current user's region/locale
+    by inspecting a real ReceivedTime, e.g. '09/10/2025 00:00:00'
+    or '10-09-2025 12:00:00 AM' or '09.10.2025 00:00'
+    """
+    sample_str = str(item.ReceivedTime)
+    # Examples:
+    # '09/10/2025 00:00:00'
+    # '10-09-2025 12:00:00 AM'
+    # Try to parse with all possible nearly-matching formats
+    # (You can add more formats if needed)
+    for date_fmt in [
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%d-%m-%Y %H:%M:%S",
+        "%d-%m-%Y %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%m/%d/%Y %I:%M:%S %p",
+        "%d/%m/%Y %I:%M:%S %p",
+        "%d-%m-%Y %I:%M:%S %p",
+        "%m/%d/%Y %H:%M:%S",
+    ]:
+        try:
+            dt = datetime.strptime(sample_str, date_fmt)
+            return date_fmt
+        except Exception:
+            continue
+    raise ValueError("Could not infer ReceivedTime format: " + sample_str)
 
-    # 24-hour check: if time looks like '17:36:00' (contains 17 or 18 or other >12)
-    is_24h = any(str(hr).zfill(2) in raw_time for hr in range(13, 24))
-
-    # Date format detection (order & separator)
-    if '/' in raw_date:
-        parts = raw_date.split('/')
-        if int(parts[0]) > 12:
-            date_fmt = '%d/%m/%Y'
-        elif int(parts[1]) > 12:
-            date_fmt = '%m/%d/%Y'
-        else:
-            date_fmt = '%m/%d/%Y'
-    elif '-' in raw_date:
-        parts = raw_date.split('-')
-        if len(parts[0]) == 4:
-            date_fmt = '%Y-%m-%d'
-        else:
-            date_fmt = '%d-%m-%Y'
-    elif '.' in raw_date:
-        parts = raw_date.split('.')
-        if len(parts[0]) == 4:
-            date_fmt = '%Y.%m.%d'
-        else:
-            date_fmt = '%d.%m.%Y'
-    else:
-        date_fmt = '%m/%d/%Y'
-
-    if is_24h:
-        am = pm = ''
-        use_ampm = False
-    else:
-        am = dt.replace(hour=1).strftime('%p')
-        pm = dt.replace(hour=13).strftime('%p')
-        use_ampm = True
-
-    return date_fmt, am, pm, use_ampm
-
-# In your function:
 def extract_email_chain_from_outlook(self):
-    # ... (your unchanged initial lines)
+    # ...other unchanged setup...
     try:
         today = datetime.now()
         days_back = 3
-
-        # --- Locale/time format detection (full robust) ---
-        date_fmt, am, pm, use_ampm = get_locale_outlook_fmt()
-        print(f"Locale format: {date_fmt}, AM: {am}, PM: {pm}, Use AM/PM: {use_ampm}")
+        
+        # Grab one real item as template!
+        folder = self.connect_to_outlook()
+        example_item = None
+        for i in range(folder.Items.Count):
+            example_item = folder.Items.Item(i+1)
+            if example_item and getattr(example_item, "ReceivedTime", None):
+                break
+        if not example_item:
+            messagebox.showerror("NoMail", "Could not sample a real email to infer format.")
+            return
+        
+        true_fmt = get_receivedtime_format_from_item(example_item)
+        print("Actual system Outlook wants:", true_fmt, "| strftime example:", today.strftime(true_fmt))
 
         pattern = re.compile("|".join(re.escape(tid) for tid in trade_ids))
         all_items = []
-
-        for days_ago in range(1, days_back + 1):
-            the_date = today - timedelta(days=days_ago)
-            date_str = the_date.strftime(date_fmt)
-            if use_ampm:
-                start_time = f"{date_str} 12:00:00 {am}"
-                end_time = f"{date_str} 11:59:59 {pm}"
-            else:
-                start_time = f"{date_str} 00:00:00"
-                end_time = f"{date_str} 23:59:59"
+        for days_ago in range(1, days_back+1):
+            dt = today - timedelta(days=days_ago)
+            date_start = dt.replace(hour=0, minute=0, second=0)
+            date_end = dt.replace(hour=23, minute=59, second=59)
+            start_time = date_start.strftime(true_fmt)
+            end_time = date_end.strftime(true_fmt)
             filter_str = f"[ReceivedTime] >= '{start_time}' AND [ReceivedTime] <= '{end_time}'"
             print(f"Trying Restrict filter: {filter_str}")
             items = folder.Items.Restrict(filter_str)
             items_list = list(items)
-            # fallback in case AM/PM casing is different
-            if not items_list and use_ampm:
-                start_time_l = f"{date_str} 12:00:00 {am.lower()}"
-                end_time_l = f"{date_str} 11:59:59 {pm.lower()}"
-                filter_str_l = f"[ReceivedTime] >= '{start_time_l}' AND [ReceivedTime] <= '{end_time_l}'"
-                items = folder.Items.Restrict(filter_str_l)
-                items_list = list(items)
             if items_list:
-                print(f"Got {len(items_list)} emails for {date_str}")
+                print(f"Got {len(items_list)} emails for {start_time.split()[0]}")
                 all_items.extend(items_list)
             else:
-                print(f"No emails for {date_str}")
-        
-        # ... your matching/GUI update logic unchanged ...
+                print(f"No emails for {start_time.split()[0]}")
+
+        # ...unchanged: trade_id matching, building self.emails, updating GUI...
+
     except Exception as e:
         messagebox.showerror("Extraction Error", f"Failed to extract emails: {e}")
     finally:
