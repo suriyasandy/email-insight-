@@ -1,44 +1,91 @@
+import re
+import time
 from datetime import datetime, timedelta
 
-def get_locale_format_and_time():
-    dt = datetime(2025, 10, 9, 13, 1, 1)
-    # Detect date format/order
+def get_locale_outlook_fmt():
+    dt = datetime(2025, 10, 9, 17, 36, 0)
     raw_date = dt.strftime('%x')
-    # Detect if 12h or 24h
     raw_time = dt.strftime('%X')
-    is_24h = dt.strftime('%H') in raw_time[:2]
+
+    # 24-hour check: if time looks like '17:36:00' (contains 17 or 18 or other >12)
+    is_24h = any(str(hr).zfill(2) in raw_time for hr in range(13, 24))
+
+    # Date format detection (order & separator)
     if '/' in raw_date:
-        p = raw_date.split('/')
-        if int(p[0]) > 12:
+        parts = raw_date.split('/')
+        if int(parts[0]) > 12:
             date_fmt = '%d/%m/%Y'
-        elif int(p[1]) > 12:
+        elif int(parts[1]) > 12:
             date_fmt = '%m/%d/%Y'
         else:
             date_fmt = '%m/%d/%Y'
     elif '-' in raw_date:
-        p = raw_date.split('-')
-        if len(p[0]) == 4:
+        parts = raw_date.split('-')
+        if len(parts[0]) == 4:
             date_fmt = '%Y-%m-%d'
         else:
             date_fmt = '%d-%m-%Y'
+    elif '.' in raw_date:
+        parts = raw_date.split('.')
+        if len(parts[0]) == 4:
+            date_fmt = '%Y.%m.%d'
+        else:
+            date_fmt = '%d.%m.%Y'
     else:
         date_fmt = '%m/%d/%Y'
-    return date_fmt, is_24h
 
-# In your filter code:
-date_fmt, is_24h = get_locale_format_and_time()
-for days_ago in range(1, days_back + 1):
-    the_date = today - timedelta(days=days_ago)
-    date_str = the_date.strftime(date_fmt)
     if is_24h:
-        start_time = f"{date_str} 00:00:00"
-        end_time = f"{date_str} 23:59:59"
+        am = pm = ''
+        use_ampm = False
     else:
-        am = the_date.replace(hour=1).strftime('%p')  # should be 'AM' or 'am'
-        pm = the_date.replace(hour=13).strftime('%p')
-        start_time = f"{date_str} 12:00:00 {am}"
-        end_time = f"{date_str} 11:59:59 {pm}"
-    filter_str = f"[ReceivedTime] >= '{start_time}' AND [ReceivedTime] <= '{end_time}'"
-    print("TRYING FILTER:", filter_str)
-    items = folder.Items.Restrict(filter_str)
-    # process items as usual
+        am = dt.replace(hour=1).strftime('%p')
+        pm = dt.replace(hour=13).strftime('%p')
+        use_ampm = True
+
+    return date_fmt, am, pm, use_ampm
+
+# In your function:
+def extract_email_chain_from_outlook(self):
+    # ... (your unchanged initial lines)
+    try:
+        today = datetime.now()
+        days_back = 3
+
+        # --- Locale/time format detection (full robust) ---
+        date_fmt, am, pm, use_ampm = get_locale_outlook_fmt()
+        print(f"Locale format: {date_fmt}, AM: {am}, PM: {pm}, Use AM/PM: {use_ampm}")
+
+        pattern = re.compile("|".join(re.escape(tid) for tid in trade_ids))
+        all_items = []
+
+        for days_ago in range(1, days_back + 1):
+            the_date = today - timedelta(days=days_ago)
+            date_str = the_date.strftime(date_fmt)
+            if use_ampm:
+                start_time = f"{date_str} 12:00:00 {am}"
+                end_time = f"{date_str} 11:59:59 {pm}"
+            else:
+                start_time = f"{date_str} 00:00:00"
+                end_time = f"{date_str} 23:59:59"
+            filter_str = f"[ReceivedTime] >= '{start_time}' AND [ReceivedTime] <= '{end_time}'"
+            print(f"Trying Restrict filter: {filter_str}")
+            items = folder.Items.Restrict(filter_str)
+            items_list = list(items)
+            # fallback in case AM/PM casing is different
+            if not items_list and use_ampm:
+                start_time_l = f"{date_str} 12:00:00 {am.lower()}"
+                end_time_l = f"{date_str} 11:59:59 {pm.lower()}"
+                filter_str_l = f"[ReceivedTime] >= '{start_time_l}' AND [ReceivedTime] <= '{end_time_l}'"
+                items = folder.Items.Restrict(filter_str_l)
+                items_list = list(items)
+            if items_list:
+                print(f"Got {len(items_list)} emails for {date_str}")
+                all_items.extend(items_list)
+            else:
+                print(f"No emails for {date_str}")
+        
+        # ... your matching/GUI update logic unchanged ...
+    except Exception as e:
+        messagebox.showerror("Extraction Error", f"Failed to extract emails: {e}")
+    finally:
+        self.progress.stop()
