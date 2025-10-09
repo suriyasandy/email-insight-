@@ -1,0 +1,44 @@
+from datetime import datetime, timedelta
+
+def get_locale_format_and_time():
+    dt = datetime(2025, 10, 9, 13, 1, 1)
+    # Detect date format/order
+    raw_date = dt.strftime('%x')
+    # Detect if 12h or 24h
+    raw_time = dt.strftime('%X')
+    is_24h = dt.strftime('%H') in raw_time[:2]
+    if '/' in raw_date:
+        p = raw_date.split('/')
+        if int(p[0]) > 12:
+            date_fmt = '%d/%m/%Y'
+        elif int(p[1]) > 12:
+            date_fmt = '%m/%d/%Y'
+        else:
+            date_fmt = '%m/%d/%Y'
+    elif '-' in raw_date:
+        p = raw_date.split('-')
+        if len(p[0]) == 4:
+            date_fmt = '%Y-%m-%d'
+        else:
+            date_fmt = '%d-%m-%Y'
+    else:
+        date_fmt = '%m/%d/%Y'
+    return date_fmt, is_24h
+
+# In your filter code:
+date_fmt, is_24h = get_locale_format_and_time()
+for days_ago in range(1, days_back + 1):
+    the_date = today - timedelta(days=days_ago)
+    date_str = the_date.strftime(date_fmt)
+    if is_24h:
+        start_time = f"{date_str} 00:00:00"
+        end_time = f"{date_str} 23:59:59"
+    else:
+        am = the_date.replace(hour=1).strftime('%p')  # should be 'AM' or 'am'
+        pm = the_date.replace(hour=13).strftime('%p')
+        start_time = f"{date_str} 12:00:00 {am}"
+        end_time = f"{date_str} 11:59:59 {pm}"
+    filter_str = f"[ReceivedTime] >= '{start_time}' AND [ReceivedTime] <= '{end_time}'"
+    print("TRYING FILTER:", filter_str)
+    items = folder.Items.Restrict(filter_str)
+    # process items as usual
