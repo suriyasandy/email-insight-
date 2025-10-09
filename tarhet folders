@@ -1,0 +1,13 @@
+def get_subfolders(self, mailbox_name):
+    target_subfolders = ["Inbox", "Sent Items", "Team", "Personal"]  # Hard-coded list
+    outlook = win32com.client.Dispatch("Outlook.Application")
+    mapi = outlook.GetNamespace("MAPI")
+    for i in range(1, mapi.Folders.Count + 1):
+        folder = mapi.Folders.Item(i)
+        if folder.Name == mailbox_name:
+            return [
+                folder.Folders.Item(j).Name
+                for j in range(1, folder.Folders.Count + 1)
+                if folder.Folders.Item(j).Name in target_subfolders
+            ]
+    return []
