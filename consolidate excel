@@ -1,0 +1,65 @@
+import os
+import glob
+import datetime
+import pandas as pd
+import csv
+
+today = datetime.datetime.now()
+today_str = today.strftime("%m_%d_%Y")
+csv_files = glob.glob(f"{self.out_path}/*.csv")
+sheet_name = "Consolidated Report"
+consolidated_file = f"{sheet_name}.xlsx"
+
+ws_rows = []  # Collect rows here
+static_headers = [...]  # define your static headers
+
+for file in csv_files:
+    base_name = file.replace("\\", "/").split("/")[-1].replace(".csv", "")
+    trade_id = base_name.split("-")[0]
+    rows_found = False
+
+    with open(file, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        csv_headers = list(reader.fieldnames) if reader.fieldnames else []
+        expected_headers = static_headers[1:]
+
+        required_sub_headers = static_headers[16:]  # change as needed
+
+        if all(header in csv_headers for header in required_sub_headers):
+            for row in reader:
+                out_row = [trade_id]
+                for header in expected_headers:
+                    out_row.append(row.get(header, ""))
+                ws_rows.append(out_row)
+            rows_found = True
+        elif any(header in csv_headers for header in expected_headers):
+            for row in reader:
+                out_row = [trade_id]
+                for header in expected_headers:
+                    out_row.append(row.get(header, ""))
+                ws_rows.append(out_row)
+            rows_found = True
+        else:
+            out_row = [f"{trade_id} - Partial header mismatch: Check file: {base_name}"] + [""] * (len(static_headers) - 1)
+            ws_rows.append(out_row)
+            rows_found = True
+
+    if not rows_found:
+        out_row = [f"{trade_id} - Not Found In Mail"] + [""] * (len(static_headers) - 1)
+        ws_rows.append(out_row)
+
+# Create DataFrame for new data
+df_new = pd.DataFrame(ws_rows, columns=static_headers)
+
+if os.path.isfile(consolidated_file):
+    # Append to existing file
+    df_existing = pd.read_excel(consolidated_file)
+    df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+    df_combined.to_excel(consolidated_file, index=False)
+else:
+    # Create new file
+    df_new.to_excel(consolidated_file, index=False)
+
+# Optionally, display in text widget (if using Tkinter)
+temp_df = pd.read_excel(consolidated_file)
+self.result_text.insert(tk.END, f"{temp_df}\n")
