@@ -1,46 +1,38 @@
 import re
-import time
+import locale
 from datetime import datetime, timedelta
 
-def get_locale_outlook_fmt():
-    dt = datetime(2025, 10, 9, 17, 36, 0)
-    raw_date = dt.strftime('%x')
-    raw_time = dt.strftime('%X')
-    ampm = dt.replace(hour=1).strftime('%p')
-    is_12h = ('AM' in ampm) or ('PM' in ampm) or ('am' in ampm) or ('pm' in ampm)
-    if '/' in raw_date:
-        parts = raw_date.split('/')
-        if int(parts[0]) > 12:
-            date_fmt = '%d/%m/%Y'
-        elif int(parts[1]) > 12:
-            date_fmt = '%m/%d/%Y'
-        else:
-            date_fmt = '%m/%d/%Y'
-    elif '-' in raw_date:
-        parts = raw_date.split('-')
-        if len(parts[0]) == 4:
-            date_fmt = '%Y-%m-%d'
-        else:
-            date_fmt = '%d-%m-%Y'
-    elif '.' in raw_date:
-        parts = raw_date.split('.')
-        if len(parts[0]) == 4:
-            date_fmt = '%Y.%m.%d'
-        else:
-            date_fmt = '%d.%m.%Y'
-    else:
-        date_fmt = '%m/%d/%Y'
+def get_region_datefmt_ampm():
+    """
+    Map the locale to a standard date format and time style for Restrict.
+    Returns: date_fmt, use_ampm (True if 12-hour clock with AM/PM)
+    """
+    region = locale.getdefaultlocale()[0] if locale.getdefaultlocale() else ''
+    # Extend this mapping as needed for your targets
+    region_datefmt = {
+        'en_US':  ('%m/%d/%Y', True),        # MM/DD/YYYY, 12h
+        'en_GB':  ('%d/%m/%Y', False),       # DD/MM/YYYY, 24h
+        'en_IN':  ('%d-%m-%Y', False),       # DD-MM-YYYY, 24h
+        'fr_FR':  ('%d/%m/%Y', False),       # France
+        'de_DE':  ('%d.%m.%Y', False),       # Germany
+        'es_ES':  ('%d/%m/%Y', False),       # Spain, etc.
+        # Add or modify for your deployment regions!
+    }
+    # Fallback: US style (12h, MM/DD/YYYY)
+    date_fmt, use_ampm = region_datefmt.get(region, ('%m/%d/%Y', True))
+    return date_fmt, use_ampm
 
-    if is_12h:
-        am = dt.replace(hour=1).strftime('%p')
-        pm = dt.replace(hour=13).strftime('%p')
-        time_fmt = '%I:%M:%S'
-        use_ampm = True
+def restrict_datetime_strings(date_dt, date_fmt, use_ampm):
+    """Return (start_time, end_time) Restrict-ready strings for a given day, region settings."""
+    if use_ampm:
+        am_marker = date_dt.replace(hour=1).strftime('%p')
+        pm_marker = date_dt.replace(hour=13).strftime('%p')
+        start_time = f"{date_dt.strftime(date_fmt)} 12:00:00 {am_marker}"
+        end_time   = f"{date_dt.strftime(date_fmt)} 11:59:59 {pm_marker}"
     else:
-        am = pm = ''
-        time_fmt = '%H:%M:%S'
-        use_ampm = False
-    return date_fmt, time_fmt, am, pm, use_ampm
+        start_time = f"{date_dt.strftime(date_fmt)} 00:00:00"
+        end_time   = f"{date_dt.strftime(date_fmt)} 23:59:59"
+    return start_time, end_time
 
 def extract_email_chain_from_outlook(self):
     trade_ids_str = None
@@ -67,42 +59,39 @@ def extract_email_chain_from_outlook(self):
 
     try:
         today = datetime.now()
-        days_back = 3  # or your preferred value
+        days_back = 3
 
-        # --- Locale/time format detection ---
-        date_fmt, time_fmt, am, pm, use_ampm = get_locale_outlook_fmt()
-        print(f"Locale: {date_fmt} {time_fmt} | use_ampm: {use_ampm}, AM: {am}, PM: {pm}")
+        # --- Hardcoded region-based restrict format ---
+        date_fmt, use_ampm = get_region_datefmt_ampm()
+        print(f"Detected locale datefmt: {date_fmt}, Use AM/PM: {use_ampm}")
 
         pattern = re.compile("|".join(re.escape(tid) for tid in trade_ids))
         all_items = []
+
         for days_ago in range(1, days_back + 1):
-            the_date = today - timedelta(days=days_ago)
-            date_str = the_date.strftime(date_fmt)
-            if use_ampm:
-                start_time = f"{date_str} 12:00:00 {am}"
-                end_time = f"{date_str} 11:59:59 {pm}"
-            else:
-                start_time = f"{date_str} 00:00:00"
-                end_time = f"{date_str} 23:59:59"
+            d = today - timedelta(days=days_ago)
+            start_time, end_time = restrict_datetime_strings(d, date_fmt, use_ampm)
             filter_str = f"[ReceivedTime] >= '{start_time}' AND [ReceivedTime] <= '{end_time}'"
-            print(f"Trying: {filter_str}")
+            print("Trying filter:", filter_str)
             items = folder.Items.Restrict(filter_str)
             items_list = list(items)
-            # fallback for case mis-match
+            # fallback if AM/PM case doesn't match
             if not items_list and use_ampm:
-                start_time_l = f"{date_str} 12:00:00 {am.lower()}"
-                end_time_l = f"{date_str} 11:59:59 {pm.lower()}"
+                am_l = d.replace(hour=1).strftime('%p').lower()
+                pm_l = d.replace(hour=13).strftime('%p').lower()
+                start_time_l = f"{d.strftime(date_fmt)} 12:00:00 {am_l}"
+                end_time_l   = f"{d.strftime(date_fmt)} 11:59:59 {pm_l}"
                 filter_str_l = f"[ReceivedTime] >= '{start_time_l}' AND [ReceivedTime] <= '{end_time_l}'"
                 items = folder.Items.Restrict(filter_str_l)
                 items_list = list(items)
             if items_list:
-                print(f"Got {len(items_list)} items for {date_str}")
+                print(f"Found {len(items_list)} emails for {d.strftime(date_fmt)}")
                 all_items.extend(items_list)
             else:
-                print(f"No items for {date_str}")
+                print(f"No emails for {d.strftime(date_fmt)}")
 
-        # ... Your trade ID and email matching logic goes here, unchanged ...
-        # (As per your screenshot, process items, append to self.emails, etc.)
+        # Use your current matcher/GUI result logic below
+        # unchanged for the region-robust restrict!
 
     except Exception as e:
         messagebox.showerror("Extraction Error", f"Failed to extract emails: {e}")
