@@ -1,34 +1,48 @@
 from datetime import datetime, timedelta
 
-# Prepare the dates you want to filter (last 12 days, but only weekdays)
-today = datetime.now()
-dates = [today - timedelta(days=i) for i in range(12)]
-weekdays = [d for d in dates if d.weekday() < 5]  # Monday=0, ..., Friday=4
+def detect_outlook_datetime_format(sample_item):
+    # Sample: item.ReceivedTime could look like 'Thu 10/9/2025 12:55 PM' (US, 12h) or '06/10/2025 19:23' (international, 24h)
+    dt_string = str(sample_item.ReceivedTime)
+    # Try to distinguish by looking for AM/PM and format markers
+    if "AM" in dt_string or "PM" in dt_string:
+        # US format: MM/DD/YYYY 12h clock
+        return "%m/%d/%Y", "12"  # 12-hour
+    elif ":" in dt_string and len(dt_string.split(":")[0].split("/")) == 3:
+        # International
+        return "%d/%m/%Y", "24"  # 24-hour
+    # Fallback: assume US
+    return "%m/%d/%Y", "12"
 
-# Collect items for each weekday and concatenate into one list
-all_items = []
-for date in weekdays:
-    date_str = date.strftime('%m/%d/%Y')
-    start_time = f"{date_str} 12:00:00 AM"
-    end_time = f"{date_str} 11:59:59 PM"
-    filter_str = f"[ReceivedTime] >= '{start_time}' AND [ReceivedTime] <= '{end_time}'"
-    items = folder.Items.Restrict(filter_str)
-    # Convert Outlook Items to list explicitly for concatenation
-    for item in items:
-        all_items.append(item)
+def get_outlook_filtered_items(folder):
+    today = datetime.now()
+    dates = [today - timedelta(days=i) for i in range(12)]
+    weekdays = [d for d in dates if d.weekday() < 5]
 
-# Now sort combined items by date descending (if needed)
-all_items.sort(key=lambda x: x.ReceivedTime, reverse=True)
+    all_items = []
+    # First, get one sample item to auto-detect format
+    items = folder.Items
+    items.Sort("[ReceivedTime]", True)
+    try:
+        sample_item = items[0]
+    except Exception:
+        print("No sample emails found in folder!")
+        return []
 
-# Later: iterate over all_items for further entity extraction logic
-# Example:
-for item in all_items:
-    if item.Class == 43:
-        subject = item.Subject or ""
-        body = item.Body or ""
-        html_body = ""
-        try:
-            html_body = item.HTMLBody
-        except:
-            pass
-        # Continue as in your original logic...
+    date_fmt, clock_type = detect_outlook_datetime_format(sample_item)
+    print(f"Detected format: {date_fmt}, clock: {clock_type}-hour")
+
+    for date in weekdays:
+        date_str = date.strftime(date_fmt)
+        if clock_type == "12":
+            start_time = f"{date_str} 12:00:00 AM"
+            end_time = f"{date_str} 11:59:59 PM"
+        else:
+            start_time = f"{date_str} 00:00:00"
+            end_time = f"{date_str} 23:59:59"
+        filter_str = f"[ReceivedTime] >= '{start_time}' AND [ReceivedTime] <= '{end_time}'"
+        print("Using filter:", filter_str)
+        items = folder.Items.Restrict(filter_str)
+        for item in items:
+            all_items.append(item)
+    print("Total fetched emails:", len(all_items))
+    return all_items
