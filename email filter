@@ -1,5 +1,72 @@
 from datetime import datetime, timedelta
 import locale
+import locale
+from datetime import datetime, timedelta
+
+self.progress.start()
+self.clear_results()
+self.emails = []
+self.unfound_trades = []
+
+try:
+    # Get today's and yesterday's dates
+    today = datetime.now()
+    dates = [today - timedelta(days=i) for i in range(2)]
+    weekdays = [date for date in dates if date.weekday() < 5]
+
+    # --- Auto-detect date format ---
+    loc = locale.getdefaultlocale()
+    if loc and "en_US" in loc[0]:
+        date_fmt = "%m/%d/%Y"  # US style
+    else:
+        date_fmt = "%d/%m/%Y"  # Most international
+
+    print("Using date format for Outlook filter:", date_fmt)
+
+    # Convert to string format for Outlook Restrict
+    weekday_strs = [date.strftime(date_fmt) for date in weekdays]
+
+    filters = [
+        f"[ReceivedTime] >= '{date_str} 12:00:00 AM' AND [ReceivedTime] <= '{date_str} 11:59:59 PM'"
+        for date_str in weekday_strs
+    ]
+    filter_str = " OR ".join(filters)
+    items = folder.Items.Restrict(filter_str)
+
+    # Sort by ReceivedTime descending
+    items.Sort("[ReceivedTime]", True)
+    all_emails = []
+
+    # For each Trade ID, gather emails and tag them
+    for trade_id in trade_ids:
+        matched = []
+        for item in items:
+            if item.Class == 43:
+                subject = item.Subject or ""
+                body = item.Body or ""
+                html_body = ""
+                try:
+                    html_body = item.HTMLBody
+                except:
+                    pass
+                if trade_id in subject or trade_id in body or (html_body and trade_id in html_body):
+                    content_text = body if body else (
+                        BeautifulSoup(html_body, "html.parser").get_text("\n") if html_body else ""
+                    )
+                    matched.append({
+                        'trade_id': trade_id,
+                        'subject': subject,
+                        'sender': item.SenderName if hasattr(item, "SenderName") else "",
+                        'recipient': item.To if hasattr(item, "To") else "",
+                        'date': item.ReceivedTime.strftime("%Y-%m-%d %H:%M:%S") if hasattr(item, "ReceivedTime") else "",
+                        'body': content_text,
+                        'html_body': html_body
+                    })
+        self.emails.extend(matched)
+        if not matched:
+            self.unfound_trades.append(trade_id)
+
+    # (Continue with your sorting
 
 def get_robust_outlook_items(folder, days_back=12):
     """
