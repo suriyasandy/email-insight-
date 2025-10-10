@@ -1,0 +1,16 @@
+import os
+import shutil
+
+# Paths to source and destination directories
+src_dir = 'path/to/source'
+dst_dir = 'path/to/destination'
+
+# Ensure destination directory exists
+os.makedirs(dst_dir, exist_ok=True)
+
+# Copy all files from src_dir to dst_dir, replacing if exists
+for filename in os.listdir(src_dir):
+    src_file = os.path.join(src_dir, filename)
+    dst_file = os.path.join(dst_dir, filename)
+    if os.path.isfile(src_file):
+        shutil.copy2(src_file, dst_file)  # Overwrites if file exists
