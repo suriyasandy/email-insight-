@@ -1,0 +1,7 @@
+Automated Outlook Email Extraction System
+Developed and deployed an enterprise-grade Python solution for large-scale automated extraction of emails and metadata from Microsoft Outlook, enabling rapid data retrieval across multiple user mailboxes and complex folder hierarchies. The system employs regex-based pattern matching to identify and extract trade IDs or transaction identifiers from email subjects and bodies, ensuring high accuracy and flexibility. Utilizing a configurable filtering engine, the tool dynamically constructs queries based on user-defined search parameters—including sender, recipient, date range, and custom keywords—and leverages Outlook’s MAPI interface for programmatic data access. Extracted records are formatted and exported to CSV for seamless integration into downstream compliance analytics, regulatory reporting, and audit workflows. This automation has eliminated manual email triage, accelerated investigation timelines by over 70%, and significantly enhanced data consistency and operational efficiency for compliance, risk management, and legal teams.
+Key Highlights:
+•	Pattern-based search using compiled regular expressions for flexible trade ID identification
+•	Dynamic filter configuration supporting custom date ranges, keywords, and folder selection
+•	Scalable architecture capable of processing thousands of emails across multiple mailboxes
+•	Structured data output (CSV) for direct integration with analytics and reporting platforms
