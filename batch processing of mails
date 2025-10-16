@@ -1,0 +1,51 @@
+import gc
+from itertools import islice
+
+def process_items_in_batches(items, batch_size=200):
+    """
+    Safely iterate through Outlook.Items in smaller batches.
+    Prevents MAPI session from exceeding object handle limits.
+    """
+    iterator = iter(items)
+    batch_index = 1
+    while True:
+        batch = list(islice(iterator, batch_size))
+        if not batch:
+            break
+
+        print(f"Processing batch {batch_index} with {len(batch)} emails...")
+        for item in batch:
+            try:
+                if item.Class == 43:  # MailItem type
+                    mail_data = {
+                        "subject": item.Subject or "",
+                        "sender": getattr(item, "SenderName", ""),
+                        "recipient": getattr(item, "To", ""),
+                        "received": item.ReceivedTime.strftime("%Y-%m-%d %H:%M:%S"),
+                        "body_excerpt": (item.Body or "")[:200],
+                    }
+                    # TODO: Replace with your internal logic (pattern match, CSV write, etc.)
+                    print(f"   Mail from {mail_data['sender']}, subject: {mail_data['subject'][:40]}...")
+            except Exception as e:
+                print(f"Error reading mail item: {e}")
+            finally:
+                # Critical cleanup of COM object reference
+                del item
+        
+        # Enforce manual garbage cleanup after each batch
+        gc.collect()
+        batch_index += 1
+
+# Usage Example (inside your main extraction block):
+print("Starting batched mail extraction...")
+
+items = folder.Items.Restrict(filter_str)
+items.Sort("[ReceivedTime]", True)
+
+try:
+    process_items_in_batches(items, batch_size=150)
+except Exception as e:
+    print("Batch processing failed:", e)
+finally:
+    gc.collect()
+    print("Batch extraction finished.")
