@@ -1,0 +1,55 @@
+import gc
+from itertools import islice
+
+def process_items_in_batches(items, batch_size=150):
+    """
+    Efficiently process items in small batches; avoids MAPI/Outlook
+    'too many open objects' errors and keeps memory low.
+    """
+    iterator = iter(items)
+    all_collected = []
+    batch_idx = 1
+    while True:
+        batch = list(islice(iterator, batch_size))
+        if not batch:
+            break
+        print(f"Processing batch {batch_idx} ({len(batch)} mails)...")
+        # Pull data out; don't keep references to MailItem objects.
+        batch_data = []
+        for item in batch:
+            try:
+                # Only extract what's needed—never accumulate MailItem refs!
+                batch_data.append(item)
+            except Exception as e:
+                print("Error processing batch item:", e)
+            finally:
+                del item  # Important: free COM object immediately
+        all_collected.extend(batch_data)
+        gc.collect()
+        batch_idx += 1
+    return all_collected
+
+# ======= In your main function after Restrict() =======
+for days_ago in range(1, days_back + 1):
+    d = today - timedelta(days=days_ago)
+    start_time, end_time = self.restrict_datetime_strings(d, date_fmt, use_ampm)
+    filter_str = f"[ReceivedTime] >= '{start_time}' AND [ReceivedTime] <= '{end_time}'"
+    logger.info(f"Trying filter: {filter_str}")
+    items = folder.Items.Restrict(filter_str)
+    # New batch logic
+    items_list = process_items_in_batches(items, batch_size=150)
+    if not items_list and use_ampm:
+        # fallback to lower-case am/pm
+        am_l = d.replace(hour=1).strftime('%p').lower()
+        pm_l = d.replace(hour=13).strftime('%p').lower()
+        start_time_l = f"{d.strftime(date_fmt)} 12:00:00 {am_l}"
+        end_time_l = f"{d.strftime(date_fmt)} 11:59:59 {pm_l}"
+        filter_str_l = f"[ReceivedTime] >= '{start_time_l}' AND [ReceivedTime] <= '{end_time_l}'"
+        logger.info(f"Trying filter (lowercase): {filter_str_l}")
+        items = folder.Items.Restrict(filter_str_l)
+        items_list = process_items_in_batches(items, batch_size=150)
+    if items_list:
+        logger.info(f"Found {len(items_list)} emails for {d.strftime(date_fmt)}")
+        all_items.extend(items_list)
+    else:
+        logger.info(f"No emails for {d.strftime(date_fmt)}")
