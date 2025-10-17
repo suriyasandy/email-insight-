@@ -322,3 +322,51 @@ self.folder_combo.grid(row=1, column=1, sticky=tk.W, pady=5)
 
     # --- In your __init__, trigger async mailbox load on startup ---
     # self.load_mailboxes_async()
+
+
+
+
+fix:
+def load_mailboxes_async(self):
+    self.mailbox_combo_var.set("Loading...")
+    self.mailbox_combo.config(state='disabled')
+
+    def worker():
+        try:
+            mailboxes = self.get_mailboxes()
+            self.root.after(0, lambda: self.finish_mailbox_load(mailboxes))
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("Error", f"Failed: {e}"))
+
+    threading.Thread(target=worker, daemon=True).start()
+
+def finish_mailbox_load(self, mailboxes):
+    self.mailbox_combo['values'] = mailboxes
+    if mailboxes:
+        self.mailbox_combo.current(0)
+        self.on_mailbox_select(None)
+    self.mailbox_combo.config(state='readonly')
+
+def on_mailbox_select(self, event):
+    selected_mailbox = self.mailbox_combo_var.get()
+    if selected_mailbox and selected_mailbox != "Loading...":
+        self.folder_var.set("Loading...")
+        self.folder_combo.config(state='disabled')
+        
+        def worker():
+            try:
+                subfolders = self.get_subfolders(selected_mailbox)
+                self.root.after(0, lambda: self.finish_folder_load(subfolders))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Error", f"Failed: {e}"))
+        
+        threading.Thread(target=worker, daemon=True).start()
+
+def finish_folder_load(self, subfolders):
+    self.folder_combo['values'] = subfolders
+    if subfolders:
+        self.folder_combo.current(0)
+    else:
+        self.folder_var.set('')
+    self.folder_combo.config(state='readonly')
+
