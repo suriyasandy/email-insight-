@@ -1,0 +1,21 @@
+def safe_items_list(items):
+    # Some MAPI collections with one result return a single item, not a collection
+    try:
+        # Try simple list conversion
+        return list(items)
+    except Exception:
+        # If not iterable, check if it's a MailItem or just None
+        if items is None:
+            return []
+        try:
+            # Try accessing .Subject or another mail-only property (for single-item)
+            subj = getattr(items, "Subject", None)
+            if subj is not None:
+                return [items]
+        except Exception:
+            pass
+        return []
+
+# Usage in your extraction loop:
+items = folder.Items.Restrict(filter_str)
+items_list = safe_items_list(items)  # always get a list, even if only one or zero matched
