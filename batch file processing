@@ -1,55 +1,130 @@
+import re
 import gc
 from itertools import islice
+from datetime import datetime, timedelta
 
 def process_items_in_batches(items, batch_size=150):
     """
-    Efficiently process items in small batches; avoids MAPI/Outlook
-    'too many open objects' errors and keeps memory low.
+    Efficiently process mail items in small batches
+    to prevent MAPI/Outlook 'too many open objects' issues.
+    Only pass back a summary (fields), not full MailItem refs!
     """
     iterator = iter(items)
-    all_collected = []
     batch_idx = 1
+    all_data = []
     while True:
         batch = list(islice(iterator, batch_size))
         if not batch:
             break
-        print(f"Processing batch {batch_idx} ({len(batch)} mails)...")
-        # Pull data out; don't keep references to MailItem objects.
-        batch_data = []
         for item in batch:
             try:
-                # Only extract what's needed—never accumulate MailItem refs!
-                batch_data.append(item)
+                if getattr(item, "Class", None) == 43:  # olMailItem
+                    # Extract only the fields you need
+                    all_data.append({
+                        "item": item,  # you may replace with .EntryID etc. if you don't want MailItem refs
+                    })
             except Exception as e:
-                print("Error processing batch item:", e)
+                print("Error reading batch mail:", e)
             finally:
-                del item  # Important: free COM object immediately
-        all_collected.extend(batch_data)
+                del item
         gc.collect()
         batch_idx += 1
-    return all_collected
+    return all_data
 
-# ======= In your main function after Restrict() =======
-for days_ago in range(1, days_back + 1):
-    d = today - timedelta(days=days_ago)
-    start_time, end_time = self.restrict_datetime_strings(d, date_fmt, use_ampm)
-    filter_str = f"[ReceivedTime] >= '{start_time}' AND [ReceivedTime] <= '{end_time}'"
-    logger.info(f"Trying filter: {filter_str}")
-    items = folder.Items.Restrict(filter_str)
-    # New batch logic
-    items_list = process_items_in_batches(items, batch_size=150)
-    if not items_list and use_ampm:
-        # fallback to lower-case am/pm
-        am_l = d.replace(hour=1).strftime('%p').lower()
-        pm_l = d.replace(hour=13).strftime('%p').lower()
-        start_time_l = f"{d.strftime(date_fmt)} 12:00:00 {am_l}"
-        end_time_l = f"{d.strftime(date_fmt)} 11:59:59 {pm_l}"
-        filter_str_l = f"[ReceivedTime] >= '{start_time_l}' AND [ReceivedTime] <= '{end_time_l}'"
-        logger.info(f"Trying filter (lowercase): {filter_str_l}")
-        items = folder.Items.Restrict(filter_str_l)
-        items_list = process_items_in_batches(items, batch_size=150)
-    if items_list:
-        logger.info(f"Found {len(items_list)} emails for {d.strftime(date_fmt)}")
-        all_items.extend(items_list)
-    else:
-        logger.info(f"No emails for {d.strftime(date_fmt)}")
+def extract_email_chain_from_outlook(self):
+    trade_ids_str = None
+    df = pd.DataFrame(columns=self.selected_columns)
+    if hasattr(self, "trade_ids_var") or isinstance(self.trade_ids_var, tk.StringVar):
+        trade_ids_str = self.trade_ids_var.get().strip()
+    if not trade_ids_str:
+        file_path = self.file_path_var.get().strip()
+        if not file_path or not os.path.exists(file_path):
+            messagebox.showwarning("Input Error", "Please upload a valid file/input trade_id")
+            return
+        self.trade_ids_var.set(self.process_trade_file(file_path))
+        trade_ids_str = self.trade_ids_var.get().strip()
+
+    trade_ids = [tid.strip() for tid in re.split(",|\\s", trade_ids_str) if tid.strip()]
+    folder = self.connect_to_outlook()
+    if not folder:
+        return
+
+    self.progress.start()
+    self.clear_results()
+    self.emails = []
+    self.unfound_trades = []
+
+    try:
+        today = datetime.now()
+        days_back = 3
+
+        date_fmt, use_ampm = self.get_region_datefmt_ampm()
+        pattern = re.compile("|".join(re.escape(tid) for tid in trade_ids))
+        all_items = []
+
+        for days_ago in range(1, days_back + 1):
+            d = today - timedelta(days=days_ago)
+            start_time, end_time = self.restrict_datetime_strings(d, date_fmt, use_ampm)
+            filter_str = f"[ReceivedTime] >= '{start_time}' AND [ReceivedTime] <= '{end_time}'"
+            logger.info(f"Trying filter: {filter_str}")
+            items = folder.Items.Restrict(filter_str)
+            items_list = process_items_in_batches(items, batch_size=150)
+            if not items_list and use_ampm:
+                # Fallback: case-insensitive AM/PM
+                am_l = d.replace(hour=1).strftime('%p').lower()
+                pm_l = d.replace(hour=13).strftime('%p').lower()
+                start_time_l = f"{d.strftime(date_fmt)} 12:00:00 {am_l}"
+                end_time_l = f"{d.strftime(date_fmt)} 11:59:59 {pm_l}"
+                filter_str_l = f"[ReceivedTime] >= '{start_time_l}' AND [ReceivedTime] <= '{end_time_l}'"
+                logger.info(f"Trying filter: {filter_str_l}")
+                items = folder.Items.Restrict(filter_str_l)
+                items_list = process_items_in_batches(items, batch_size=150)
+            if items_list:
+                logger.info(f"Found {len(items_list)} emails for {d.strftime(date_fmt)}")
+                all_items.extend([entry["item"] for entry in items_list])
+            else:
+                logger.info(f"No emails for {d.strftime(date_fmt)}")
+
+        # For each Trade ID, gather emails...
+        for trade_id in trade_ids:
+            matched = []
+            for item in all_items:
+                try:
+                    if getattr(item, "Class", None) == 43:
+                        subject = item.Subject or ""
+                        body = item.Body or ""
+                        html_body = ""
+                        try:
+                            html_body = item.HTMLBody
+                        except Exception:
+                            pass
+                        if (trade_id in subject or
+                            trade_id in body or
+                            (html_body and trade_id in html_body)):
+                            matched.append({
+                                'trade_id': trade_id,
+                                'subject': subject,
+                                'sender': getattr(item, "SenderName", ""),
+                                'recipient': getattr(item, "To", ""),
+                                'date': item.ReceivedTime.strftime("%Y-%m-%d %H:%M:%S") if item.ReceivedTime else "",
+                                'body': body,
+                                'html_body': html_body,
+                            })
+                except Exception as e:
+                    logger.warning(f"Error processing matched item: {e}")
+                finally:
+                    del item
+            self.emails.append({"trade_id": trade_id, "emails": matched})
+
+        # Compile final result for your display—flatten as before
+        all_emails = []
+        for entry in self.emails:
+            all_emails.extend(entry["emails"])
+
+        # Continue with your UI population and summary creation
+
+    except Exception as e:
+        messagebox.showerror("Extraction Error", f"Failed to extract emails: {e}")
+    finally:
+        self.progress.stop()
+        gc.collect()
