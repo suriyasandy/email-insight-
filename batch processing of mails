@@ -1,51 +1,298 @@
+import re
 import gc
-from itertools import islice
+import threading
+import locale
+from datetime import datetime, timedelta
 
-def process_items_in_batches(items, batch_size=200):
-    """
-    Safely iterate through Outlook.Items in smaller batches.
-    Prevents MAPI session from exceeding object handle limits.
-    """
-    iterator = iter(items)
-    batch_index = 1
-    while True:
-        batch = list(islice(iterator, batch_size))
-        if not batch:
-            break
+class EmailEntityExtractor:
+    def __init__(self, root, dir_path, temp_path):
+        # ...existing init code...
+        self.cached_mailboxes = None
+        self.cached_subfolders = {}
+        # ...rest of init...
 
-        print(f"Processing batch {batch_index} with {len(batch)} emails...")
-        for item in batch:
-            try:
-                if item.Class == 43:  # MailItem type
-                    mail_data = {
-                        "subject": item.Subject or "",
-                        "sender": getattr(item, "SenderName", ""),
-                        "recipient": getattr(item, "To", ""),
-                        "received": item.ReceivedTime.strftime("%Y-%m-%d %H:%M:%S"),
-                        "body_excerpt": (item.Body or "")[:200],
-                    }
-                    # TODO: Replace with your internal logic (pattern match, CSV write, etc.)
-                    print(f"   Mail from {mail_data['sender']}, subject: {mail_data['subject'][:40]}...")
-            except Exception as e:
-                print(f"Error reading mail item: {e}")
-            finally:
-                # Critical cleanup of COM object reference
-                del item
+    # --- Threaded mailbox loading ---
+    def get_mailboxes(self):
+        """Get mailboxes with caching"""
+        if self.cached_mailboxes is not None:
+            return self.cached_mailboxes
         
-        # Enforce manual garbage cleanup after each batch
-        gc.collect()
-        batch_index += 1
+        target_mailbox = ["HBEU-Rates-TA", "EXOTICSTAG HBFR-DMTC", "FO-EURO-RATES HBFR-DMTC", 
+                          "MODERIV-HSBCF HBFR-DMTC", "GMO_DARR", "HKFI Derv Flow"]
+        outlook = win32com.client.Dispatch("Outlook.Application")
+        mapi = outlook.GetNamespace("MAPI")
+        mailboxes = []
+        for i in range(1, mapi.Folders.Count + 1):
+            name = mapi.Folders.Item(i).Name
+            if name in target_mailbox:
+                mailboxes.append(mapi.Folders.Item(i).Name)
+        self.cached_mailboxes = mailboxes
+        return mailboxes
 
-# Usage Example (inside your main extraction block):
-print("Starting batched mail extraction...")
+    def load_mailboxes_async(self):
+        """Load mailboxes in background thread"""
+        self.mailbox_combo.set("Loading...")
+        self.mailbox_combo.config(state='disabled')
+        
+        def worker():
+            try:
+                mailboxes = self.get_mailboxes()
+                self.root.after(0, lambda: self.finish_mailbox_load(mailboxes))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to load mailboxes: {e}"))
+        
+        threading.Thread(target=worker, daemon=True).start()
 
-items = folder.Items.Restrict(filter_str)
-items.Sort("[ReceivedTime]", True)
+    def finish_mailbox_load(self, mailboxes):
+        self.mailbox_combo['values'] = mailboxes
+        if mailboxes:
+            self.mailbox_combo.current(0)
+            self.on_mailbox_select(None)
+        self.mailbox_combo.config(state='readonly')
 
-try:
-    process_items_in_batches(items, batch_size=150)
-except Exception as e:
-    print("Batch processing failed:", e)
-finally:
-    gc.collect()
-    print("Batch extraction finished.")
+    # --- Threaded subfolder loading ---
+    def get_subfolders(self, mailbox_name):
+        """Get subfolders with caching"""
+        if mailbox_name in self.cached_subfolders:
+            return self.cached_subfolders[mailbox_name]
+        
+        target_subfolders = ["Sent Items", "QTrack History 2025Q4"]
+        outlook = win32com.client.Dispatch("Outlook.Application")
+        mapi = outlook.GetNamespace("MAPI")
+        for i in range(1, mapi.Folders.Count + 1):
+            folder = mapi.Folders.Item(i)
+            if folder.Name == mailbox_name:
+                result = [
+                    folder.Folders.Item(j).Name
+                    for j in range(1, folder.Folders.Count + 1)
+                    if folder.Folders.Item(j).Name in target_subfolders
+                ]
+                self.cached_subfolders[mailbox_name] = result
+                return result
+        return []
+
+    def on_mailbox_select(self, event):
+        """Handle mailbox selection with threading"""
+        selected_mailbox = self.mailbox_combo.get()
+        if selected_mailbox and selected_mailbox != "Loading...":
+            self.folder_combo.set("Loading...")
+            self.folder_combo.config(state='disabled')
+            
+            def worker():
+                try:
+                    subfolders = self.get_subfolders(selected_mailbox)
+                    self.root.after(0, lambda: self.finish_folder_load(subfolders))
+                except Exception as e:
+                    self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to load folders: {e}"))
+            
+            threading.Thread(target=worker, daemon=True).start()
+
+    def finish_folder_load(self, subfolders):
+        self.folder_combo['values'] = subfolders
+        if subfolders:
+            self.folder_combo.current(0)
+        else:
+            self.folder_combo.set('')
+        self.folder_combo.config(state='readonly')
+
+    # --- Connection with caching ---
+    def connect_to_outlook(self):
+        """Connect to selected mailbox and folder"""
+        try:
+            mailbox_name = self.mailbox_combo.get()
+            folder_name = self.folder_var.get()
+            
+            outlook = win32com.client.Dispatch("Outlook.Application")
+            mapi = outlook.GetNamespace("MAPI")
+            
+            mailbox = None
+            for i in range(1, mapi.Folders.Count + 1):
+                m = mapi.Folders.Item(i)
+                if m.Name == mailbox_name:
+                    mailbox = m
+                    break
+            
+            if mailbox is None:
+                logger.info(f"Selected {mailbox_name} Mailbox not found!")
+                messagebox.showerror("Select Mailbox", "Selected mailbox not found!")
+                return None
+            
+            folder = None
+            for j in range(1, mailbox.Folders.Count + 1):
+                f = mailbox.Folders.Item(j)
+                if f.Name == folder_name:
+                    folder = f
+                    break
+            
+            if folder is None:
+                logger.info(f"Folder '{folder_name}' not found in '{mailbox_name}'!")
+                messagebox.showerror("Select Folder", f"Folder '{folder_name}' not found in '{mailbox_name}'!")
+                return None
+            
+            return folder
+        except Exception as e:
+            logger.info(f"Failed to connect to Outlook: {e}")
+            messagebox.showerror("Outlook Connection Error", f"Failed to connect to Outlook: {e}")
+            return None
+
+    # --- Region/date helpers ---
+    def get_region_datefmt_ampm(self):
+        region = locale.getdefaultlocale()[0] if locale.getdefaultlocale() else ''
+        region_datefmt = {
+            'en_US': ('%m/%d/%Y', True),
+            'en_GB': ('%d/%m/%Y', False),
+            'en_IN': ('%d-%m-%Y', False),
+            'fr_FR': ('%d/%m/%Y', False),
+            'de_DE': ('%d.%m.%Y', False),
+            'es_ES': ('%d/%m/%Y', False),
+            'en_UK': ('%d/%m/%Y', False),
+            'en_HK': ('%d/%m/%Y', True)
+        }
+        date_fmt, use_ampm = region_datefmt.get(region, ('%m/%d/%Y', True))
+        return date_fmt, use_ampm
+
+    def restrict_datetime_strings(self, date_dt, date_fmt, use_ampm):
+        if use_ampm:
+            am_marker = date_dt.replace(hour=1).strftime('%p')
+            pm_marker = date_dt.replace(hour=13).strftime('%p')
+            start_time = f"{date_dt.strftime(date_fmt)} 12:00:00 {am_marker}"
+            end_time = f"{date_dt.strftime(date_fmt)} 11:59:59 {pm_marker}"
+        else:
+            start_time = f"{date_dt.strftime(date_fmt)} 00:00:00"
+            end_time = f"{date_dt.strftime(date_fmt)} 23:59:59"
+        return start_time, end_time
+
+    # --- Safe item handling ---
+    def safe_items_to_list(self, items):
+        try:
+            return list(items)
+        except Exception:
+            if items is None:
+                return []
+            try:
+                if getattr(items, "Subject", None) is not None:
+                    return [items]
+            except Exception:
+                pass
+            return []
+
+    def process_items_in_batches(self, items, batch_size=400):
+        items_list = self.safe_items_to_list(items)
+        if not items_list:
+            return []
+        all_data = []
+        for i in range(0, len(items_list), batch_size):
+            batch = items_list[i:i + batch_size]
+            for item in batch:
+                try:
+                    if getattr(item, "Class", None) == 43:
+                        all_data.append({"item": item})
+                except Exception as e:
+                    print("Error reading batch mail:", e)
+                finally:
+                    del item
+            gc.collect()
+        return all_data
+
+    # --- Threaded extraction ---
+    def extract_email_chain_from_outlook(self):
+        """Main extraction - run in thread"""
+        trade_ids_str = self.trade_ids_var.get().strip()
+        if not trade_ids_str:
+            messagebox.showwarning("Input Error", "Please enter trade IDs")
+            return
+        
+        self.progress.start()
+        self.clear_results()
+        
+        def worker():
+            try:
+                folder = self.connect_to_outlook()
+                if not folder:
+                    self.root.after(0, lambda: self.finish_extraction([], "Could not connect to folder"))
+                    return
+                
+                trade_ids = [tid.strip() for tid in re.split(",|\\s", trade_ids_str) if tid.strip()]
+                today = datetime.now()
+                days_back = 3
+                date_fmt, use_ampm = self.get_region_datefmt_ampm()
+                all_items = []
+
+                for days_ago in range(1, days_back + 1):
+                    d = today - timedelta(days=days_ago)
+                    start_time, end_time = self.restrict_datetime_strings(d, date_fmt, use_ampm)
+                    filter_str = f"[ReceivedTime] >= '{start_time}' AND [ReceivedTime] <= '{end_time}'"
+                    logger.info(f"Trying filter: {filter_str}")
+                    items = folder.Items.Restrict(filter_str)
+                    items_list = self.process_items_in_batches(items, batch_size=150)
+                    
+                    if not items_list and use_ampm:
+                        am_l = d.replace(hour=1).strftime('%p').lower()
+                        pm_l = d.replace(hour=13).strftime('%p').lower()
+                        start_time_l = f"{d.strftime(date_fmt)} 12:00:00 {am_l}"
+                        end_time_l = f"{d.strftime(date_fmt)} 11:59:59 {pm_l}"
+                        filter_str_l = f"[ReceivedTime] >= '{start_time_l}' AND [ReceivedTime] <= '{end_time_l}'"
+                        items = folder.Items.Restrict(filter_str_l)
+                        items_list = self.process_items_in_batches(items, batch_size=150)
+                    
+                    if items_list:
+                        all_items.extend([entry["item"] for entry in items_list])
+
+                emails = []
+                for trade_id in trade_ids:
+                    for item in all_items:
+                        try:
+                            if getattr(item, "Class", None) == 43:
+                                subject = item.Subject or ""
+                                body = item.Body or ""
+                                html_body = ""
+                                try:
+                                    html_body = item.HTMLBody
+                                except Exception:
+                                    pass
+                                if (trade_id in subject or trade_id in body or (html_body and trade_id in html_body)):
+                                    emails.append({
+                                        'trade_id': trade_id,
+                                        'subject': subject,
+                                        'sender': getattr(item, "SenderName", ""),
+                                        'recipient': getattr(item, "To", ""),
+                                        'date': item.ReceivedTime.strftime("%Y-%m-%d %H:%M:%S") if item.ReceivedTime else "",
+                                        'body': body,
+                                        'html_body': html_body,
+                                    })
+                        except Exception:
+                            pass
+
+                gc.collect()
+                self.root.after(0, lambda: self.finish_extraction(emails, None))
+            except Exception as e:
+                gc.collect()
+                self.root.after(0, lambda: self.finish_extraction([], str(e)))
+        
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_extraction(self, emails, error):
+        self.progress.stop()
+        if error:
+            messagebox.showerror("Extraction Error", f"Failed: {error}")
+        else:
+            self.emails = emails
+            for idx, mail in enumerate(emails):
+                email_type = "Original"
+                subj = mail['subject'].lower()
+                if "re:" in subj:
+                    email_type = f"Reply {idx}"
+                elif "fw:" in subj or "fwd:" in subj:
+                    email_type = f"Forward {idx}"
+                self.tree.insert('', 'end', iid=str(idx), values=(
+                    mail['trade_id'],
+                    mail['subject'][:30] + "..." if len(mail['subject']) > 30 else mail['subject'],
+                    mail['sender'][:20] + "..." if len(mail['sender']) > 20 else mail['sender'],
+                    mail['recipient'][:20] + "..." if len(mail['recipient']) > 20 else mail['recipient'],
+                    mail['date'],
+                    email_type
+                ))
+            messagebox.showinfo("Success", f"Loaded {len(emails)} emails")
+
+    # --- In your __init__, trigger async mailbox load on startup ---
+    # self.load_mailboxes_async()
