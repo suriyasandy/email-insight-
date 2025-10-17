@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 import win32com.client
+import pythoncom
 import pandas as pd
 import os
 import re
@@ -21,9 +22,16 @@ class OutlookEmailHarvester:
         self.root.geometry("1400x900")
         self.root.resizable(True, True)
 
-        # Initialize caches
-        self.cached_mailboxes = None
-        self.cached_subfolders = {}
+        # Fixed mailbox and folder mapping
+        self.mailbox_folders = {
+            "HBEU-Rates-TA": ["Sent Items", "QTrack History 2025Q4"],
+            "EXOTICSTAG HBFR-DMTC": ["Sent Items", "QTrack History 2025Q4"],
+            "FO-EURO-RATES HBFR-DMTC": ["Sent Items", "QTrack History 2025Q4"],
+            "MODERIV-HSBCF HBFR-DMTC": ["Sent Items", "QTrack History 2025Q4"],
+            "GMO_DARR": ["Sent Items", "QTrack History 2025Q4"],
+            "HKFI Derv Flow": ["Sent Items", "QTrack History 2025Q4"]
+        }
+
         self.emails = []
         self.unfound_trades = []
 
@@ -44,12 +52,14 @@ class OutlookEmailHarvester:
         self.mailbox_combo = ttk.Combobox(
             main_frame, 
             textvariable=self.mailbox_combo_var,
-            values=[], 
+            values=list(self.mailbox_folders.keys()), 
             width=30,
             state="readonly"
         )
         self.mailbox_combo.grid(row=0, column=1, sticky=tk.W, pady=5, padx=(3, 0))
         self.mailbox_combo.bind("<<ComboboxSelected>>", self.on_mailbox_select)
+        if self.mailbox_folders:
+            self.mailbox_combo.current(0)
 
         # Folder Selection
         ttk.Label(main_frame, text="Select Outlook Folder:").grid(row=1, column=0, sticky=tk.W, pady=5)
@@ -116,93 +126,19 @@ class OutlookEmailHarvester:
 
         self.tree.bind('<<TreeviewSelect>>', self.on_email_select)
 
-        # Load mailboxes asynchronously on startup
-        self.load_mailboxes_async()
+        # Initialize folder combo with first mailbox
+        self.on_mailbox_select(None)
 
-    # ========== MAILBOX LOADING WITH THREADING ==========
-    def get_mailboxes(self):
-        if self.cached_mailboxes is not None:
-            return self.cached_mailboxes
-        
-        target_mailbox = [
-            "HBEU-Rates-TA", "EXOTICSTAG HBFR-DMTC", "FO-EURO-RATES HBFR-DMTC",
-            "MODERIV-HSBCF HBFR-DMTC", "GMO_DARR", "HKFI Derv Flow"
-        ]
-        outlook = win32com.client.Dispatch("Outlook.Application")
-        mapi = outlook.GetNamespace("MAPI")
-        mailboxes = []
-        for i in range(1, mapi.Folders.Count + 1):
-            name = mapi.Folders.Item(i).Name
-            if name in target_mailbox:
-                mailboxes.append(name)
-        self.cached_mailboxes = mailboxes
-        return mailboxes
-
-    def load_mailboxes_async(self):
-        self.mailbox_combo_var.set("Loading...")
-        self.mailbox_combo.config(state='disabled')
-        
-        def worker():
-            try:
-                mailboxes = self.get_mailboxes()
-                self.root.after(0, lambda: self.finish_mailbox_load(mailboxes))
-            except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to load mailboxes: {e}"))
-        
-        threading.Thread(target=worker, daemon=True).start()
-
-    def finish_mailbox_load(self, mailboxes):
-        self.mailbox_combo['values'] = mailboxes
-        if mailboxes:
-            self.mailbox_combo.current(0)
-            self.on_mailbox_select(None)
-        self.mailbox_combo.config(state='readonly')
-        self.status_label.config(text="Mailboxes loaded")
-
-    # ========== FOLDER LOADING WITH THREADING ==========
-    def get_subfolders(self, mailbox_name):
-        if mailbox_name in self.cached_subfolders:
-            return self.cached_subfolders[mailbox_name]
-        
-        target_subfolders = ["Sent Items", "QTrack History 2025Q4"]
-        outlook = win32com.client.Dispatch("Outlook.Application")
-        mapi = outlook.GetNamespace("MAPI")
-        for i in range(1, mapi.Folders.Count + 1):
-            folder = mapi.Folders.Item(i)
-            if folder.Name == mailbox_name:
-                result = [
-                    folder.Folders.Item(j).Name
-                    for j in range(1, folder.Folders.Count + 1)
-                    if folder.Folders.Item(j).Name in target_subfolders
-                ]
-                self.cached_subfolders[mailbox_name] = result
-                return result
-        return []
-
+    # ========== FOLDER LOADING ==========
     def on_mailbox_select(self, event):
         selected_mailbox = self.mailbox_combo_var.get()
-        if selected_mailbox and selected_mailbox != "Loading...":
-            self.folder_var.set("Loading...")
-            self.folder_combo.config(state='disabled')
-            self.status_label.config(text="Loading folders...")
-            
-            def worker():
-                try:
-                    subfolders = self.get_subfolders(selected_mailbox)
-                    self.root.after(0, lambda: self.finish_folder_load(subfolders))
-                except Exception as e:
-                    self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to load folders: {e}"))
-            
-            threading.Thread(target=worker, daemon=True).start()
-
-    def finish_folder_load(self, subfolders):
-        self.folder_combo['values'] = subfolders
-        if subfolders:
-            self.folder_combo.current(0)
-        else:
-            self.folder_var.set('')
-        self.folder_combo.config(state='readonly')
-        self.status_label.config(text="Ready")
+        if selected_mailbox in self.mailbox_folders:
+            folders = self.mailbox_folders[selected_mailbox]
+            self.folder_combo['values'] = folders
+            if folders:
+                self.folder_combo.current(0)
+            else:
+                self.folder_var.set('')
 
     # ========== OUTLOOK CONNECTION ==========
     def connect_to_outlook(self):
@@ -311,6 +247,7 @@ class OutlookEmailHarvester:
         self.status_label.config(text="Extracting emails...")
         
         def worker():
+            pythoncom.CoInitialize()  # Initialize COM for this thread
             try:
                 folder = self.connect_to_outlook()
                 if not folder:
@@ -373,6 +310,8 @@ class OutlookEmailHarvester:
             except Exception as e:
                 gc.collect()
                 self.root.after(0, lambda: self.finish_extraction([], str(e)))
+            finally:
+                pythoncom.CoUninitialize()  # Clean up COM
         
         threading.Thread(target=worker, daemon=True).start()
 
