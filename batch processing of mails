@@ -10,6 +10,32 @@ class EmailEntityExtractor:
         self.cached_mailboxes = None
         self.cached_subfolders = {}
         # ...rest of init...
+# In your __init__ or setup code:
+
+# These are the control variables you use to get/set the selected value
+self.mailbox_combo_var = tk.StringVar()
+self.folder_var = tk.StringVar()
+
+# The widgets (Comboboxes) themselves
+self.mailbox_combo = ttk.Combobox(
+    main_frame,
+    textvariable=self.mailbox_combo_var,
+    values=[],  # Start empty, will be loaded asynchronously
+    width=30,
+    state="readonly"
+)
+self.mailbox_combo.grid(row=0, column=1, sticky=tk.W, pady=5)
+self.mailbox_combo.bind("<<ComboboxSelected>>", self.on_mailbox_select)
+
+self.folder_combo = ttk.Combobox(
+    main_frame,
+    textvariable=self.folder_var,
+    values=[],
+    width=30,
+    state="readonly"
+)
+self.folder_combo.grid(row=1, column=1, sticky=tk.W, pady=5)
+
 
     # --- Threaded mailbox loading ---
     def get_mailboxes(self):
