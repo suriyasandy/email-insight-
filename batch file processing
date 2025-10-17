@@ -3,26 +3,39 @@ import gc
 from itertools import islice
 from datetime import datetime, timedelta
 
+def safe_items_to_list(items):
+    """Convert Restrict result to a list, handling non-iterable cases."""
+    try:
+        return list(items)
+    except Exception:
+        # If not iterable, check if it's a single MailItem or None
+        if items is None:
+            return []
+        try:
+            # Try to access a MailItem property
+            if getattr(items, "Subject", None) is not None:
+                return [items]
+        except Exception:
+            pass
+        return []
+
 def process_items_in_batches(items, batch_size=150):
     """
     Efficiently process mail items in small batches
     to prevent MAPI/Outlook 'too many open objects' issues.
-    Only pass back a summary (fields), not full MailItem refs!
     """
-    iterator = iter(items)
-    batch_idx = 1
+    items_list = safe_items_to_list(items)
+    if not items_list:
+        return []
+    
     all_data = []
-    while True:
-        batch = list(islice(iterator, batch_size))
-        if not batch:
-            break
+    batch_idx = 1
+    for i in range(0, len(items_list), batch_size):
+        batch = items_list[i:i + batch_size]
         for item in batch:
             try:
                 if getattr(item, "Class", None) == 43:  # olMailItem
-                    # Extract only the fields you need
-                    all_data.append({
-                        "item": item,  # you may replace with .EntryID etc. if you don't want MailItem refs
-                    })
+                    all_data.append({"item": item})
             except Exception as e:
                 print("Error reading batch mail:", e)
             finally:
@@ -98,9 +111,7 @@ def extract_email_chain_from_outlook(self):
                             html_body = item.HTMLBody
                         except Exception:
                             pass
-                        if (trade_id in subject or
-                            trade_id in body or
-                            (html_body and trade_id in html_body)):
+                        if (trade_id in subject or trade_id in body or (html_body and trade_id in html_body)):
                             matched.append({
                                 'trade_id': trade_id,
                                 'subject': subject,
@@ -112,8 +123,6 @@ def extract_email_chain_from_outlook(self):
                             })
                 except Exception as e:
                     logger.warning(f"Error processing matched item: {e}")
-                finally:
-                    del item
             self.emails.append({"trade_id": trade_id, "emails": matched})
 
         # Compile final result for your display—flatten as before
@@ -121,10 +130,33 @@ def extract_email_chain_from_outlook(self):
         for entry in self.emails:
             all_emails.extend(entry["emails"])
 
-        # Continue with your UI population and summary creation
+        # Populate tree and finalize (your existing logic)
+        found_trade_ids = set(mail['trade_id'] for mail in all_emails)
+        self.unfound_trades = [tid for tid in trade_ids if tid not in found_trade_ids]
+        logger.info(f"{self.unfound_trades} - Not Found In Email")
+        
+        for idx, mail in enumerate(all_emails):
+            email_type = "Original"
+            subj = mail['subject'].lower()
+            if "re:" in subj:
+                email_type = f"Reply {idx}"
+            elif "fw:" in subj or "fwd:" in subj:
+                email_type = f"Forward {idx}"
+            else:
+                email_type = f"Email {idx}"
+            self.tree.insert('', 'end', iid=str(idx), values=(
+                mail['trade_id'],
+                mail['subject'][:30] + "..." if len(mail['subject']) > 30 else mail['subject'],
+                mail['sender'][:20] + "..." if len(mail['sender']) > 20 else mail['sender'],
+                mail['recipient'][:20] + "..." if len(mail['recipient']) > 20 else mail['recipient'],
+                mail['date'],
+                email_type
+            ))
+
+        messagebox.showinfo("Success", f"Loaded {len(all_emails)} emails across {len(trade_ids)} Trade IDs.")
 
     except Exception as e:
-        messagebox.showerror("Extraction Error", f"Failed to extract emails: {e}")
+        messagebox.showerror("Extraction Error", f"Failed to extract emails:\n{e}")
     finally:
         self.progress.stop()
         gc.collect()
