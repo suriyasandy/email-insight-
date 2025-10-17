@@ -1,20 +1,31 @@
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, filedialog
+from tkinter import ttk, scrolledtext, messagebox
+import win32com.client
 import pandas as pd
 import os
 import re
-import json
-import extract_msg
-import html2text
-import tempfile
-from datetime import datetime
+import gc
+import threading
+import locale
+import logging
+from datetime import datetime, timedelta
 
-class EmailEntityExtractor:
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class OutlookEmailHarvester:
     def __init__(self, root):
         self.root = root
-        self.root.title("Email Entity Extractor")
-        self.root.geometry("1300x950")
+        self.root.title("Outlook Email Harvester")
+        self.root.geometry("1400x900")
         self.root.resizable(True, True)
+
+        # Initialize caches
+        self.cached_mailboxes = None
+        self.cached_subfolders = {}
+        self.emails = []
+        self.unfound_trades = []
 
         style = ttk.Style()
         style.theme_use('clam')
@@ -27,308 +38,377 @@ class EmailEntityExtractor:
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(7, weight=1)
 
-        ttk.Label(main_frame, text="MSG File:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.file_path_var = tk.StringVar()
-        file_entry = ttk.Entry(main_frame, textvariable=self.file_path_var, width=50)
-        file_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(0, 5))
-        ttk.Button(main_frame, text="Browse", command=self.browse_file).grid(row=0, column=2, pady=5)
+        # Mailbox Selection
+        ttk.Label(main_frame, text="Select Mailbox:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.mailbox_combo_var = tk.StringVar()
+        self.mailbox_combo = ttk.Combobox(
+            main_frame, 
+            textvariable=self.mailbox_combo_var,
+            values=[], 
+            width=30,
+            state="readonly"
+        )
+        self.mailbox_combo.grid(row=0, column=1, sticky=tk.W, pady=5, padx=(3, 0))
+        self.mailbox_combo.bind("<<ComboboxSelected>>", self.on_mailbox_select)
 
-        ttk.Label(main_frame, text="Trade ID:").grid(row=0, column=3, sticky=tk.W, pady=5)
-        self.trade_id_var = tk.StringVar()
-        trade_id_entry = ttk.Entry(main_frame, textvariable=self.trade_id_var, width=20)
-        trade_id_entry.grid(row=0, column=4, pady=5, padx=(0, 5))
+        # Folder Selection
+        ttk.Label(main_frame, text="Select Outlook Folder:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.folder_var = tk.StringVar()
+        self.folder_combo = ttk.Combobox(
+            main_frame, 
+            textvariable=self.folder_var,
+            values=[], 
+            width=30,
+            state="readonly"
+        )
+        self.folder_combo.grid(row=1, column=1, sticky=tk.W, pady=5, padx=(3, 0))
 
-        ttk.Label(main_frame, text="Entity Definitions (JSON format):").grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.entity_text = scrolledtext.ScrolledText(main_frame, width=80, height=10)
-        self.entity_text.grid(row=1, column=1, columnspan=4, sticky=(tk.W, tk.E), pady=5)
+        # Trade ID Input
+        ttk.Label(main_frame, text="Trade IDs:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.trade_ids_var = tk.StringVar()
+        trade_id_entry = ttk.Entry(main_frame, textvariable=self.trade_ids_var, width=50)
+        trade_id_entry.grid(row=2, column=1, sticky=(tk.W, tk.E), pady=5, padx=(3, 0))
 
-        # Single pattern with named groups for package details
-        package_pattern = r"(?P<TradeID>\d{7,8}[A-Z]?)\s+(?P<Currency>[A-Z]{3})\s+(?P<Amount>\d{1,3}(?:,\d{3})*\.\d{2})\s+(?P<StartDate>\d{2}/\d{2}/\d{4})\s+(?P<EndDate>\d{2}/\d{2}/\d{4})\s+(?P<Book1>\w+)\s+(?P<Book2>\w+)"
-
-        custom_entities = {
-            "entities": [
-                {
-                    "name": "PackageDetails",
-                    "type": "pattern",
-                    "patterns": [
-                        package_pattern
-                    ]
-                },
-                # You can still keep separate entities, if you want:
-                {
-                    "name": "TradeID",
-                    "type": "pattern",
-                    "patterns": ["\\b\\d{7,8}[A-Z]?\\b"]
-                },
-                {
-                    "name": "Currency",
-                    "type": "pattern",
-                    "patterns": ["\\b[A-Z]{3}\\b"]
-                },
-                {
-                    "name": "Amount",
-                    "type": "pattern",
-                    "patterns": ["\\d{1,3}(?:,\\d{3})*\\.\\d{2}"]
-                },
-                {
-                    "name": "StartDate",
-                    "type": "pattern",
-                    "patterns": ["\\b\\d{2}/\\d{2}/\\d{4}\\b"]
-                },
-                {
-                    "name": "EndDate",
-                    "type": "pattern",
-                    "patterns": ["\\b\\d{2}/\\d{2}/\\d{4}\\b"]
-                },
-                {
-                    "name": "Book1",
-                    "type": "pattern",
-                    "patterns": ["\\b\\w+\\b"]
-                },
-                {
-                    "name": "Book2",
-                    "type": "pattern",
-                    "patterns": ["\\b\\w+\\b"]
-                }
-            ]
-        }
-
-        self.entity_text.insert(1.0, json.dumps(custom_entities, indent=2))
-
+        # Buttons
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=2, column=0, columnspan=5, pady=10)
-
-        ttk.Button(button_frame, text="Extract Email Chain", command=self.extract_email_chain).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Extract Entities", command=self.extract_entities).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Clear Results", command=self.clear_results).pack(side=tk.LEFT, padx=5)
+        button_frame.grid(row=3, column=0, columnspan=5, pady=10)
+        ttk.Button(button_frame, text="Extract from Outlook", command=self.extract_email_chain_from_outlook).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Export to CSV", command=self.export_to_csv).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Save Config", command=self.save_config).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Load Config", command=self.load_config).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Clear Results", command=self.clear_results).pack(side=tk.LEFT, padx=5)
 
+        # Progress Bar
         self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
-        self.progress.grid(row=3, column=0, columnspan=5, sticky=(tk.W, tk.E), pady=5)
+        self.progress.grid(row=4, column=0, columnspan=5, sticky=(tk.W, tk.E), pady=5)
 
-        ttk.Label(main_frame, text="Email Chain:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        # Status Label
+        self.status_label = ttk.Label(main_frame, text="Ready")
+        self.status_label.grid(row=5, column=0, columnspan=5, sticky=tk.W)
 
-        self.tree = ttk.Treeview(main_frame, columns=('Subject', 'From', 'To', 'Date', 'Email Type'), show='headings')
+        # Email Chain Tree
+        ttk.Label(main_frame, text="Email Chain:").grid(row=6, column=0, sticky=tk.W, pady=5)
+        self.tree = ttk.Treeview(
+            main_frame, 
+            columns=('trade_id', 'Subject', 'From', 'To', 'Date', 'Email Type'), 
+            show='headings'
+        )
+        self.tree.heading('trade_id', text='Trade ID')
         self.tree.heading('Subject', text='Subject')
         self.tree.heading('From', text='From')
         self.tree.heading('To', text='To')
         self.tree.heading('Date', text='Date')
         self.tree.heading('Email Type', text='Email Type')
+        self.tree.column('trade_id', width=80)
         self.tree.column('Subject', width=200)
         self.tree.column('From', width=120)
         self.tree.column('To', width=120)
         self.tree.column('Date', width=120)
         self.tree.column('Email Type', width=80)
-        self.tree.grid(row=5, column=0, columnspan=5, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        self.tree.grid(row=7, column=0, columnspan=5, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        
         tree_scroll = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        tree_scroll.grid(row=5, column=5, sticky=(tk.N, tk.S))
+        tree_scroll.grid(row=7, column=5, sticky=(tk.N, tk.S))
         self.tree.configure(yscrollcommand=tree_scroll.set)
 
-        ttk.Label(main_frame, text="Email Content:").grid(row=6, column=0, sticky=tk.W, pady=5)
+        # Email Content Display
+        ttk.Label(main_frame, text="Email Content:").grid(row=8, column=0, sticky=tk.W, pady=5)
         self.content_text = scrolledtext.ScrolledText(main_frame, width=80, height=15)
-        self.content_text.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
-
-        ttk.Label(main_frame, text="Extracted Entities:").grid(row=6, column=3, sticky=tk.W, pady=5)
-        self.entity_result_text = scrolledtext.ScrolledText(main_frame, width=40, height=15)
-        self.entity_result_text.grid(row=7, column=3, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        self.content_text.grid(row=9, column=0, columnspan=5, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
 
         self.tree.bind('<<TreeviewSelect>>', self.on_email_select)
 
-        self.emails = []
-        self.current_email_index = -1
-        self.entity_definitions = custom_entities
+        # Load mailboxes asynchronously on startup
+        self.load_mailboxes_async()
 
-    def browse_file(self):
-        file_path = filedialog.askopenfilename(
-            title="Select MSG File",
-            filetypes=[("Outlook MSG Files", "*.msg"), ("All Files", "*.*")]
-        )
-        if file_path:
-            self.file_path_var.set(file_path)
+    # ========== MAILBOX LOADING WITH THREADING ==========
+    def get_mailboxes(self):
+        if self.cached_mailboxes is not None:
+            return self.cached_mailboxes
+        
+        target_mailbox = [
+            "HBEU-Rates-TA", "EXOTICSTAG HBFR-DMTC", "FO-EURO-RATES HBFR-DMTC",
+            "MODERIV-HSBCF HBFR-DMTC", "GMO_DARR", "HKFI Derv Flow"
+        ]
+        outlook = win32com.client.Dispatch("Outlook.Application")
+        mapi = outlook.GetNamespace("MAPI")
+        mailboxes = []
+        for i in range(1, mapi.Folders.Count + 1):
+            name = mapi.Folders.Item(i).Name
+            if name in target_mailbox:
+                mailboxes.append(name)
+        self.cached_mailboxes = mailboxes
+        return mailboxes
 
-    def extract_email_chain(self):
-        file_path = self.file_path_var.get().strip()
-        trade_id = self.trade_id_var.get().strip()
+    def load_mailboxes_async(self):
+        self.mailbox_combo_var.set("Loading...")
+        self.mailbox_combo.config(state='disabled')
+        
+        def worker():
+            try:
+                mailboxes = self.get_mailboxes()
+                self.root.after(0, lambda: self.finish_mailbox_load(mailboxes))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to load mailboxes: {e}"))
+        
+        threading.Thread(target=worker, daemon=True).start()
 
-        if not file_path or not os.path.exists(file_path):
-            messagebox.showwarning("Input Error", "Please select a valid MSG file")
-            return
+    def finish_mailbox_load(self, mailboxes):
+        self.mailbox_combo['values'] = mailboxes
+        if mailboxes:
+            self.mailbox_combo.current(0)
+            self.on_mailbox_select(None)
+        self.mailbox_combo.config(state='readonly')
+        self.status_label.config(text="Mailboxes loaded")
 
-        if not trade_id:
-            messagebox.showwarning("Input Error", "Please enter a Trade ID")
-            return
+    # ========== FOLDER LOADING WITH THREADING ==========
+    def get_subfolders(self, mailbox_name):
+        if mailbox_name in self.cached_subfolders:
+            return self.cached_subfolders[mailbox_name]
+        
+        target_subfolders = ["Sent Items", "QTrack History 2025Q4"]
+        outlook = win32com.client.Dispatch("Outlook.Application")
+        mapi = outlook.GetNamespace("MAPI")
+        for i in range(1, mapi.Folders.Count + 1):
+            folder = mapi.Folders.Item(i)
+            if folder.Name == mailbox_name:
+                result = [
+                    folder.Folders.Item(j).Name
+                    for j in range(1, folder.Folders.Count + 1)
+                    if folder.Folders.Item(j).Name in target_subfolders
+                ]
+                self.cached_subfolders[mailbox_name] = result
+                return result
+        return []
 
-        self.progress.start()
-        self.clear_results()
+    def on_mailbox_select(self, event):
+        selected_mailbox = self.mailbox_combo_var.get()
+        if selected_mailbox and selected_mailbox != "Loading...":
+            self.folder_var.set("Loading...")
+            self.folder_combo.config(state='disabled')
+            self.status_label.config(text="Loading folders...")
+            
+            def worker():
+                try:
+                    subfolders = self.get_subfolders(selected_mailbox)
+                    self.root.after(0, lambda: self.finish_folder_load(subfolders))
+                except Exception as e:
+                    self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to load folders: {e}"))
+            
+            threading.Thread(target=worker, daemon=True).start()
 
+    def finish_folder_load(self, subfolders):
+        self.folder_combo['values'] = subfolders
+        if subfolders:
+            self.folder_combo.current(0)
+        else:
+            self.folder_var.set('')
+        self.folder_combo.config(state='readonly')
+        self.status_label.config(text="Ready")
+
+    # ========== OUTLOOK CONNECTION ==========
+    def connect_to_outlook(self):
         try:
-            self.emails = self.process_msg_file(file_path)
-            trade_id_found = False
-            for email in self.emails:
-                if trade_id.lower() in email['subject'].lower() or trade_id.lower() in email['body'].lower():
-                    trade_id_found = True
+            mailbox_name = self.mailbox_combo_var.get()
+            folder_name = self.folder_var.get()
+            
+            outlook = win32com.client.Dispatch("Outlook.Application")
+            mapi = outlook.GetNamespace("MAPI")
+            
+            mailbox = None
+            for i in range(1, mapi.Folders.Count + 1):
+                m = mapi.Folders.Item(i)
+                if m.Name == mailbox_name:
+                    mailbox = m
                     break
-
-            if not trade_id_found:
-                messagebox.showerror("Trade ID Not Found", f"Trade ID '{trade_id}' not found in any email subject or body")
-                self.progress.stop()
-                return
-
-            self.sort_emails_by_date()
-            for i, email_data in enumerate(self.emails):
-                email_type = "Original"
-                if i > 0:
-                    subj = email_data['subject'].lower()
-                    if "re:" in subj:
-                        email_type = f"Reply {i}"
-                    elif "fw:" in subj or "fwd:" in subj:
-                        email_type = f"Forward {i}"
-                    else:
-                        email_type = f"Email {i}"
-
-                self.tree.insert('', 'end', iid=str(i), values=(
-                    email_data['subject'][:30] + "..." if len(email_data['subject']) > 30 else email_data['subject'],
-                    email_data['sender'][:20] + "..." if len(email_data['sender']) > 20 else email_data['sender'],
-                    email_data['recipient'][:20] + "..." if len(email_data['recipient']) > 20 else email_data['recipient'],
-                    email_data['date'],
-                    email_type
-                ))
-
-            if not self.emails:
-                messagebox.showinfo("No Emails", "No emails found in the MSG file")
-            else:
-                messagebox.showinfo("Success", f"Found {len(self.emails)} emails in the chain")
-
+            
+            if mailbox is None:
+                logger.info(f"Mailbox '{mailbox_name}' not found!")
+                return None
+            
+            folder = None
+            for j in range(1, mailbox.Folders.Count + 1):
+                f = mailbox.Folders.Item(j)
+                if f.Name == folder_name:
+                    folder = f
+                    break
+            
+            if folder is None:
+                logger.info(f"Folder '{folder_name}' not found in '{mailbox_name}'!")
+                return None
+            
+            return folder
         except Exception as e:
-            messagebox.showerror("Error", f"An error occurred: {str(e)}")
-        finally:
-            self.progress.stop()
-
-    def sort_emails_by_date(self):
-        def parse_date(date_str):
-            for fmt in ("%Y-%m-%d %H:%M:%S", "%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d", "%d-%m-%Y", "%m-%d-%Y"):
-                try:
-                    return datetime.strptime(date_str, fmt)
-                except ValueError:
-                    continue
-            return datetime.min
-        self.emails.sort(key=lambda x: parse_date(x.get('date', '')), reverse=True)
-
-    def process_msg_file(self, file_path):
-        emails = []
-        try:
-            msg = extract_msg.Message(file_path)
-            main_email = self.extract_email_data(msg)
-            if main_email:
-                emails.append(main_email)
-            if main_email:
-                embedded_emails = self.extract_emails_from_body(main_email['body'])
-                emails.extend(embedded_emails)
-            if hasattr(msg, 'attachments'):
-                for attachment in msg.attachments:
-                    if attachment.type == 'msg':
-                        with tempfile.NamedTemporaryFile(suffix='.msg', delete=False) as temp_file:
-                            temp_path = temp_file.name
-                        with open(temp_path, 'wb') as f:
-                            f.write(attachment.data)
-                        emails.extend(self.process_msg_file(temp_path))
-                        os.unlink(temp_path)
-            msg.close()
-        except Exception as e:
-            print(f"Error processing MSG file: {e}")
-        return emails
-
-    def extract_email_data(self, msg):
-        try:
-            subject = msg.subject or ""
-            body = msg.body or ""
-            html_body = msg.htmlBody or ""
-            text_content = self.extract_text_content(body, html_body)
-            sender = msg.sender or "Unknown"
-            if hasattr(sender, 'name'):
-                sender = sender.name
-            elif hasattr(sender, 'email_address'):
-                sender = sender.email_address
-            recipient = ""
-            if hasattr(msg, 'recipients'):
-                try:
-                    recipients = []
-                    for r in msg.recipients:
-                        if hasattr(r, 'name') and r.name:
-                            recipients.append(r.name)
-                        elif hasattr(r, 'email_address') and r.email_address:
-                            recipients.append(r.email_address)
-                    recipient = ", ".join(recipients)
-                except:
-                    recipient = "Unknown"
-            date = msg.date.strftime("%Y-%m-%d %H:%M:%S") if hasattr(msg, 'date') and msg.date else "Unknown"
-            return {
-                'subject': subject,
-                'sender': sender,
-                'recipient': recipient,
-                'date': date,
-                'body': text_content,
-                'html_body': html_body
-            }
-        except Exception as e:
-            print(f"Error extracting email  {e}")
+            logger.error(f"Failed to connect to Outlook: {e}")
             return None
 
-    def extract_emails_from_body(self, body):
-        emails = []
-        email_patterns = [
-            r'From:.*?Subject:.*?Date:.*?(?=From:|Subject:|Date:|$)',
-            r'-----Original Message-----.*?-----',
-            r'On.*wrote:.*?From:.*?Subject:',
-        ]
-        for pattern in email_patterns:
-            matches = re.finditer(pattern, body, re.DOTALL | re.IGNORECASE)
-            for match in matches:
-                email_text = match.group(0)
-                sender_match = re.search(r'From:\s*(.*?)(?=\n|$)', email_text, re.IGNORECASE)
-                recipient_match = re.search(r'To:\s*(.*?)(?=\n|$)', email_text, re.IGNORECASE)
-                subject_match = re.search(r'Subject:\s*(.*?)(?=\n|$)', email_text, re.IGNORECASE)
-                date_match = re.search(r'Date:\s*(.*?)(?=\n|$)', email_text, re.IGNORECASE)
-                body_start = max(
-                    email_text.find('\n\n') if '\n\n' in email_text else 0,
-                    email_text.find('\r\n\r\n') if '\r\n\r\n' in email_text else 0
-                )
-                email_body = email_text[body_start:].strip() if body_start > 0 else email_text
-                emails.append({
-                    'subject': subject_match.group(1) if subject_match else "No Subject",
-                    'sender': sender_match.group(1) if sender_match else "Unknown",
-                    'recipient': recipient_match.group(1) if recipient_match else "Unknown",
-                    'date': date_match.group(1) if date_match else "Unknown",
-                    'body': email_body,
-                    'html_body': ""
-                })
-        return emails
+    # ========== REGION/DATE HELPERS ==========
+    def get_region_datefmt_ampm(self):
+        region = locale.getdefaultlocale()[0] if locale.getdefaultlocale() else ''
+        region_datefmt = {
+            'en_US': ('%m/%d/%Y', True),
+            'en_GB': ('%d/%m/%Y', False),
+            'en_IN': ('%d-%m-%Y', False),
+            'fr_FR': ('%d/%m/%Y', False),
+            'de_DE': ('%d.%m.%Y', False),
+            'es_ES': ('%d/%m/%Y', False),
+            'en_UK': ('%d/%m/%Y', False),
+            'en_HK': ('%d/%m/%Y', True)
+        }
+        date_fmt, use_ampm = region_datefmt.get(region, ('%m/%d/%Y', True))
+        return date_fmt, use_ampm
 
-    def extract_text_content(self, plain_text, html_content):
-        if plain_text:
-            return plain_text
-        if html_content:
+    def restrict_datetime_strings(self, date_dt, date_fmt, use_ampm):
+        if use_ampm:
+            am_marker = date_dt.replace(hour=1).strftime('%p')
+            pm_marker = date_dt.replace(hour=13).strftime('%p')
+            start_time = f"{date_dt.strftime(date_fmt)} 12:00:00 {am_marker}"
+            end_time = f"{date_dt.strftime(date_fmt)} 11:59:59 {pm_marker}"
+        else:
+            start_time = f"{date_dt.strftime(date_fmt)} 00:00:00"
+            end_time = f"{date_dt.strftime(date_fmt)} 23:59:59"
+        return start_time, end_time
+
+    # ========== SAFE ITEM HANDLING ==========
+    def safe_items_to_list(self, items):
+        try:
+            return list(items)
+        except Exception:
+            if items is None:
+                return []
             try:
-                import html2text
-                h = html2text.HTML2Text()
-                h.ignore_links = False
-                return h.handle(html_content)
+                if getattr(items, "Subject", None) is not None:
+                    return [items]
+            except Exception:
+                pass
+            return []
+
+    def process_items_in_batches(self, items, batch_size=150):
+        items_list = self.safe_items_to_list(items)
+        if not items_list:
+            return []
+        all_data = []
+        for i in range(0, len(items_list), batch_size):
+            batch = items_list[i:i + batch_size]
+            for item in batch:
+                try:
+                    if getattr(item, "Class", None) == 43:
+                        all_data.append({"item": item})
+                except Exception as e:
+                    logger.warning(f"Error reading batch mail: {e}")
+                finally:
+                    del item
+            gc.collect()
+        return all_data
+
+    # ========== THREADED EXTRACTION ==========
+    def extract_email_chain_from_outlook(self):
+        trade_ids_str = self.trade_ids_var.get().strip()
+        if not trade_ids_str:
+            messagebox.showwarning("Input Error", "Please enter trade IDs")
+            return
+        
+        self.progress.start()
+        self.clear_results()
+        self.status_label.config(text="Extracting emails...")
+        
+        def worker():
+            try:
+                folder = self.connect_to_outlook()
+                if not folder:
+                    self.root.after(0, lambda: self.finish_extraction([], "Could not connect to folder"))
+                    return
+                
+                trade_ids = [tid.strip() for tid in re.split(",|\\s", trade_ids_str) if tid.strip()]
+                today = datetime.now()
+                days_back = 3
+                date_fmt, use_ampm = self.get_region_datefmt_ampm()
+                all_items = []
+
+                for days_ago in range(1, days_back + 1):
+                    d = today - timedelta(days=days_ago)
+                    start_time, end_time = self.restrict_datetime_strings(d, date_fmt, use_ampm)
+                    filter_str = f"[ReceivedTime] >= '{start_time}' AND [ReceivedTime] <= '{end_time}'"
+                    logger.info(f"Trying filter: {filter_str}")
+                    items = folder.Items.Restrict(filter_str)
+                    items_list = self.process_items_in_batches(items, batch_size=150)
+                    
+                    if not items_list and use_ampm:
+                        am_l = d.replace(hour=1).strftime('%p').lower()
+                        pm_l = d.replace(hour=13).strftime('%p').lower()
+                        start_time_l = f"{d.strftime(date_fmt)} 12:00:00 {am_l}"
+                        end_time_l = f"{d.strftime(date_fmt)} 11:59:59 {pm_l}"
+                        filter_str_l = f"[ReceivedTime] >= '{start_time_l}' AND [ReceivedTime] <= '{end_time_l}'"
+                        items = folder.Items.Restrict(filter_str_l)
+                        items_list = self.process_items_in_batches(items, batch_size=150)
+                    
+                    if items_list:
+                        all_items.extend([entry["item"] for entry in items_list])
+
+                emails = []
+                for trade_id in trade_ids:
+                    for item in all_items:
+                        try:
+                            if getattr(item, "Class", None) == 43:
+                                subject = item.Subject or ""
+                                body = item.Body or ""
+                                html_body = ""
+                                try:
+                                    html_body = item.HTMLBody
+                                except Exception:
+                                    pass
+                                if (trade_id in subject or trade_id in body or (html_body and trade_id in html_body)):
+                                    emails.append({
+                                        'trade_id': trade_id,
+                                        'subject': subject,
+                                        'sender': getattr(item, "SenderName", ""),
+                                        'recipient': getattr(item, "To", ""),
+                                        'date': item.ReceivedTime.strftime("%Y-%m-%d %H:%M:%S") if item.ReceivedTime else "",
+                                        'body': body,
+                                        'html_body': html_body,
+                                    })
+                        except Exception:
+                            pass
+
+                gc.collect()
+                self.root.after(0, lambda: self.finish_extraction(emails, None))
             except Exception as e:
-                print(f"Error converting HTML to text: {e}")
-                return html_content
-        return ""
+                gc.collect()
+                self.root.after(0, lambda: self.finish_extraction([], str(e)))
+        
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_extraction(self, emails, error):
+        self.progress.stop()
+        self.status_label.config(text="Ready")
+        if error:
+            messagebox.showerror("Extraction Error", f"Failed: {error}")
+        else:
+            self.emails = emails
+            for idx, mail in enumerate(emails):
+                email_type = "Original"
+                subj = mail['subject'].lower()
+                if "re:" in subj:
+                    email_type = f"Reply {idx}"
+                elif "fw:" in subj or "fwd:" in subj:
+                    email_type = f"Forward {idx}"
+                self.tree.insert('', 'end', iid=str(idx), values=(
+                    mail['trade_id'],
+                    mail['subject'][:30] + "..." if len(mail['subject']) > 30 else mail['subject'],
+                    mail['sender'][:20] + "..." if len(mail['sender']) > 20 else mail['sender'],
+                    mail['recipient'][:20] + "..." if len(mail['recipient']) > 20 else mail['recipient'],
+                    mail['date'],
+                    email_type
+                ))
+            messagebox.showinfo("Success", f"Loaded {len(emails)} emails")
 
     def on_email_select(self, event):
         selection = self.tree.selection()
         if not selection:
             return
         email_index = int(selection[0])
-        self.current_email_index = email_index
         if 0 <= email_index < len(self.emails):
             email_data = self.emails[email_index]
-            content = f"From: {email_data['sender']}\n"
+            content = f"Trade ID: {email_data['trade_id']}\n"
+            content += f"From: {email_data['sender']}\n"
             content += f"To: {email_data['recipient']}\n"
             content += f"Date: {email_data['date']}\n"
             content += f"Subject: {email_data['subject']}\n"
@@ -336,191 +416,26 @@ class EmailEntityExtractor:
             content += email_data['body']
             self.content_text.delete(1.0, tk.END)
             self.content_text.insert(1.0, content)
-            self.entity_result_text.delete(1.0, tk.END)
-
-    def extract_entities(self):
-        if self.current_email_index == -1 or not self.emails:
-            messagebox.showwarning("No Selection", "Please select an email from the chain first")
-            return
-        try:
-            entity_json = self.entity_text.get(1.0, tk.END).strip()
-            self.entity_definitions = json.loads(entity_json)
-        except Exception as e:
-            messagebox.showerror("Error", f"Invalid JSON format: {str(e)}")
-            return
-
-        email_data = self.emails[self.current_email_index]
-        entities = {}
-
-        for entity_def in self.entity_definitions.get("entities", []):
-            entity_name = entity_def.get("name", "")
-            entity_type = entity_def.get("type", "")
-            if entity_type == "pattern":
-                patterns = entity_def.get("patterns", [])
-                if entity_name == "PackageDetails":
-                    # Special handling to extract named groups from full line pattern
-                    for pattern in patterns:
-                        try:
-                            regex = re.compile(pattern, re.IGNORECASE)
-                            matches = regex.finditer(email_data['body'])
-                            for match in matches:
-                                groupdict = match.groupdict()
-                                for k, v in groupdict.items():
-                                    if v:
-                                        entities.setdefault(k, []).append(f"{v} (Body)")
-                        except Exception as e:
-                            print(f"Error in PackageDetails pattern extraction: {e}")
-                else:
-                    subject_vals = self.extract_with_patterns(email_data['subject'], patterns)
-                    body_vals = self.extract_with_patterns(email_data['body'], patterns)
-                    all_vals = []
-                    for v in subject_vals:
-                        all_vals.append(f"{v} (Subject)")
-                    for v in body_vals:
-                        all_vals.append(f"{v} (Body)")
-                    if all_vals:
-                        entities[entity_name] = all_vals
-
-            elif entity_type == "gazetteer":
-                gazetteer_vals = entity_def.get("values", [])
-                subject_vals = self.extract_with_gazetteer(email_data['subject'], gazetteer_vals)
-                body_vals = self.extract_with_gazetteer(email_data['body'], gazetteer_vals)
-                all_vals = []
-                for v in subject_vals:
-                    all_vals.append(f"{v} (Subject)")
-                for v in body_vals:
-                    all_vals.append(f"{v} (Body)")
-                if all_vals:
-                    entities[entity_name] = all_vals
-
-        self.entity_result_text.delete(1.0, tk.END)
-        if entities:
-            for entity_name, vals in entities.items():
-                self.entity_result_text.insert(tk.END, f"{entity_name}:\n")
-                for v in vals:
-                    self.entity_result_text.insert(tk.END, f"  - {v}\n")
-                self.entity_result_text.insert(tk.END, "\n")
-        else:
-            self.entity_result_text.insert(tk.END, "No entities found in this email")
-
-    def extract_with_patterns(self, content, patterns):
-        values = []
-        for pattern in patterns:
-            try:
-                matches = re.findall(pattern, content, re.IGNORECASE)
-                for match in matches:
-                    if isinstance(match, tuple):
-                        val = match[0].strip() if match[0] else ""
-                    else:
-                        val = str(match).strip()
-                    if val and val not in values:
-                        values.append(val)
-            except Exception as e:
-                print(f"Error with pattern {pattern}: {e}")
-        return values
-
-    def extract_with_gazetteer(self, content, gazetteer_values):
-        values = []
-        for val in gazetteer_values:
-            if re.search(r'\b' + re.escape(val) + r'\b', content, re.IGNORECASE):
-                if val not in values:
-                    values.append(val)
-        return values
-
-    def clear_results(self):
-        self.tree.delete(*self.tree.get_children())
-        self.content_text.delete(1.0, tk.END)
-        self.entity_result_text.delete(1.0, tk.END)
-        self.emails = []
-        self.current_email_index = -1
 
     def export_to_csv(self):
         if not self.emails:
             messagebox.showwarning("No Data", "No emails to export")
             return
         try:
-            entity_json = self.entity_text.get(1.0, tk.END).strip()
-            entity_definitions = json.loads(entity_json)
-            all_data = []
-            for i, email_data in enumerate(self.emails):
-                entities = {}
-                for entity_def in entity_definitions.get("entities", []):
-                    entity_name = entity_def.get("name", "")
-                    entity_type = entity_def.get("type", "")
-                    if entity_type == "pattern":
-                        patterns = entity_def.get("patterns", [])
-                        if entity_name == "PackageDetails":
-                            # Extract named groups again
-                            for pattern in patterns:
-                                try:
-                                    regex = re.compile(pattern, re.IGNORECASE)
-                                    matches = regex.finditer(email_data['body'])
-                                    for match in matches:
-                                        groupdict = match.groupdict()
-                                        for k, v in groupdict.items():
-                                            if v:
-                                                entities.setdefault(k, []).append(v)
-                                except Exception as e:
-                                    print(f"Error in PackageDetails pattern extraction (CSV): {e}")
-                        else:
-                            vals = self.extract_with_patterns(email_data['body'], patterns)
-                            if vals:
-                                entities[entity_name] = vals
-                    elif entity_type == "gazetteer":
-                        gazetteer_vals = entity_def.get("values", [])
-                        vals = self.extract_with_gazetteer(email_data['body'], gazetteer_vals)
-                        if vals:
-                            entities[entity_name] = vals
-                row_data = {
-                    'Email_Index': i,
-                    'Subject': email_data['subject'],
-                    'From': email_data['sender'],
-                    'To': email_data['recipient'],
-                    'Date': email_data['date'],
-                    'Body_Preview': email_data['body'][:100] + "..." if len(email_data['body']) > 100 else email_data['body']
-                }
-                for entity_name, vals in entities.items():
-                    row_data[entity_name] = ", ".join(vals) if vals else ""
-                all_data.append(row_data)
-            df = pd.DataFrame(all_data)
-            filename = f"email_entities_export_{self.trade_id_var.get()}.csv"
+            df = pd.DataFrame(self.emails)
+            today = datetime.now()
+            filename = f"email_export_{today.strftime('%Y%m%d_%H%M%S')}.csv"
             df.to_csv(filename, index=False)
             messagebox.showinfo("Success", f"Data exported to {filename}")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to export  {str(e)}")
+            messagebox.showerror("Error", f"Failed to export: {str(e)}")
 
-    def save_config(self):
-        try:
-            entity_json = self.entity_text.get(1.0, tk.END).strip()
-            json.loads(entity_json)
-            file_path = filedialog.asksaveasfilename(
-                title="Save Entity Configuration",
-                defaultextension=".json",
-                filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
-            )
-            if file_path:
-                with open(file_path, 'w') as f:
-                    f.write(entity_json)
-                messagebox.showinfo("Success", "Configuration saved successfully")
-        except Exception as e:
-            messagebox.showerror("Error", f"Invalid JSON or save error: {str(e)}")
-
-    def load_config(self):
-        file_path = filedialog.askopenfilename(
-            title="Load Entity Configuration",
-            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
-        )
-        if file_path:
-            try:
-                with open(file_path, 'r') as f:
-                    config_data = json.load(f)
-                self.entity_text.delete(1.0, tk.END)
-                self.entity_text.insert(1.0, json.dumps(config_data, indent=2))
-                messagebox.showinfo("Success", "Configuration loaded successfully")
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to load configuration: {str(e)}")
+    def clear_results(self):
+        self.tree.delete(*self.tree.get_children())
+        self.content_text.delete(1.0, tk.END)
+        self.emails = []
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = EmailEntityExtractor(root)
+    app = OutlookEmailHarvester(root)
     root.mainloop()
