@@ -5,8 +5,14 @@ def on_email_select(self, event):
     email_index = int(selection[0])
     self.current_email_index = email_index
 
-    if 0 <= email_index < len(self.displayed_emails):
-        email_data = self.displayed_emails[email_index]
+    # Flatten emails for indexing in the same order as the tree population
+    flat_emails = []
+    for trade_obj in self.emails:
+        for mail in trade_obj["emails"]:
+            flat_emails.append(mail)
+    # Now flat_emails[email_index] matches the clicked row
+    if 0 <= email_index < len(flat_emails):
+        email_data = flat_emails[email_index]
         content = f"Trade ID: {email_data['trade_id']}\n"
         content += f"From: {email_data['sender']}\n"
         content += f"To: {email_data['recipient']}\n"
@@ -17,6 +23,7 @@ def on_email_select(self, event):
         self.content_text.delete(1.0, tk.END)
         self.content_text.insert(1.0, content)
         self.entity_result_text.delete(1.0, tk.END)
+
 
 
 
