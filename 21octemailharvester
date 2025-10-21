@@ -273,6 +273,116 @@ class EmailEntityExtractor:
             gc.collect()
         return all_data
 
+def extract_email_chain_from_outlook(self):
+    trade_ids_str = None
+    df = pd.DataFrame(columns=self.selected_columns)
+    if hasattr(self, "trade_ids_var") or isinstance(self.trade_ids_var, tk.StringVar):
+        trade_ids_str = self.trade_ids_var.get().strip()
+    if not trade_ids_str:
+        file_path = self.file_path_var.get().strip()
+        if not file_path or not os.path.exists(file_path):
+            messagebox.showwarning("Input Error", "Please upload a valid file/input trade_id")
+            return
+        self.trade_ids_var.set(self.process_trade_file(file_path))
+        trade_ids_str = self.trade_ids_var.get().strip()
+
+    trade_ids = [tid.strip() for tid in re.split(",|\\s", trade_ids_str) if tid.strip()]
+    
+    self.progress.start()
+    self.clear_results()
+    self.emails = []
+    self.unfound_trades = []
+
+    def worker():
+        pythoncom.CoInitialize()
+        try:
+            folder = self.connect_to_outlook()
+            if not folder:
+                self.root.after(0, lambda: self.finish_extraction([], "Could not connect to folder"))
+                return
+
+            today = datetime.now()
+            days_back = 3
+            date_fmt, use_ampm = self.get_region_datefmt_ampm()
+            logger.info(f"Detected locale datefmt: {date_fmt}, Use AM/PM: {use_ampm}")
+            all_items = []
+
+            for days_ago in range(1, days_back + 1):
+                d = today - timedelta(days=days_ago)
+                start_time, end_time = self.restrict_datetime_strings(d, date_fmt, use_ampm)
+                filter_str = f"[ReceivedTime] >= '{start_time}' AND [ReceivedTime] <= '{end_time}'"
+                logger.info(f"Trying filter: {filter_str}")
+                items = folder.Items.Restrict(filter_str)
+                items_list = self.process_items_in_batches(items, batch_size=150)
+                if not items_list and use_ampm:
+                    am_l = d.replace(hour=1).strftime('%p').lower()
+                    pm_l = d.replace(hour=13).strftime('%p').lower()
+                    start_time_l = f"{d.strftime(date_fmt)} 12:00:00 {am_l}"
+                    end_time_l = f"{d.strftime(date_fmt)} 11:59:59 {pm_l}"
+                    filter_str_l = f"[ReceivedTime] >= '{start_time_l}' AND [ReceivedTime] <= '{end_time_l}'"
+                    logger.info(f"Trying filter (lowercase): {filter_str_l}")
+                    items = folder.Items.Restrict(filter_str_l)
+                    items_list = self.process_items_in_batches(items, batch_size=150)
+                if items_list:
+                    logger.info(f"Found {len(items_list)} emails for {d.strftime(date_fmt)}")
+                    all_items.extend([entry["item"] for entry in items_list])
+                else:
+                    logger.info(f"No emails for {d.strftime(date_fmt)}")
+
+            # --------- Fully optimized single-pass trade ID matching ---------
+            tid_re = re.compile(r"|".join(re.escape(tid) for tid in trade_ids), re.IGNORECASE)
+            matches_by_tradeid = {tid: [] for tid in trade_ids}
+            all_emails = []
+
+            for item in all_items:
+                try:
+                    if getattr(item, "Class", None) == 43:
+                        subject = item.Subject or ""
+                        body = item.Body or ""
+                        html_body = ""
+                        try:
+                            html_body = item.HTMLBody
+                        except Exception:
+                            pass
+                        search_zone = f"{subject}\n{body}\n{html_body}"
+                        found_tids = set(m.lower() for m in tid_re.findall(search_zone))
+                        for found_tid in found_tids:
+                            # Map back to the original-cased trade_id by lookup
+                            for orig_tid in trade_ids:
+                                if orig_tid.lower() == found_tid:
+                                    email_obj = {
+                                        'trade_id': orig_tid,
+                                        'subject': subject,
+                                        'sender': getattr(item, "SenderName", ""),
+                                        'recipient': getattr(item, "To", ""),
+                                        'date': item.ReceivedTime.strftime("%Y-%m-%d %H:%M:%S") if item.ReceivedTime else "",
+                                        'body': body,
+                                        'html_body': html_body,
+                                    }
+                                    matches_by_tradeid[orig_tid].append(email_obj)
+                                    all_emails.append(email_obj)
+                except Exception:
+                    pass
+
+            found_trade_ids = set(mail['trade_id'] for mail in all_emails)
+            self.unfound_trades = [tid for tid in trade_ids if tid not in found_trade_ids]
+            logger.info(f"{self.unfound_trades} - Not Found In Email")
+            for tid in self.unfound_trades:
+                filename = f"{tid}_email_entities_export_{datetime.now().strftime('%m_%d_%Y')}.csv"
+                out_file = os.path.join(self.temp_path, filename)
+                df.to_csv(out_file, index=False)
+
+            gc.collect()
+            self.root.after(0, lambda: self.finish_extraction(all_emails, None))
+        except Exception as e:
+            gc.collect()
+            self.root.after(0, lambda: self.finish_extraction([], str(e)))
+        finally:
+            pythoncom.CoUninitialize()
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
     def extract_email_chain_from_outlook(self):
         """Main threaded extraction from Outlook"""
         trade_ids_str = None 
