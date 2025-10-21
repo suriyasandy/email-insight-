@@ -1,3 +1,82 @@
+def finish_extraction(self, all_emails, error):
+    """Handle extraction completion - show all emails with latest highlighted (newest first per trade)"""
+    self.progress.stop()
+    if error:
+        messagebox.showerror("Extraction Error", f"Failed to extract emails: {error}")
+        return
+
+    df = pd.DataFrame(columns=self.selected_columns)
+    from collections import defaultdict
+    from dateutil import parser
+    from datetime import datetime
+
+    # Group emails by trade_id
+    emails_by_trade = defaultdict(list)
+    for mail in all_emails:
+        emails_by_trade[mail['trade_id']].append(mail)
+
+    # Sort each trade's emails by date (newest first)
+    for trade_id in emails_by_trade:
+        emails_by_trade[trade_id].sort(
+            key=lambda x: parser.parse(x['date']) if x['date'] else datetime.min,
+            reverse=True
+        )
+
+    # Configure highlight color for latest mails
+    self.tree.tag_configure('latest', background='#90ee90')  # Light green
+
+    # Populate tree with all emails, highlighting latest
+    idx = 0
+    for trade_id in sorted(emails_by_trade.keys()):
+        trade_emails = emails_by_trade[trade_id]
+        # Index 0 is now the latest email after reverse sort
+        for email_idx, mail in enumerate(trade_emails):
+            if email_idx == 0:
+                email_type = "Latest"
+                tags = ('latest',)
+            else:
+                subj = mail['subject'].lower()
+                if "re:" in subj:
+                    email_type = f"Reply {email_idx}"
+                elif "fw:" in subj or "fwd:" in subj:
+                    email_type = f"Forward {email_idx}"
+                else:
+                    email_type = f"Email {email_idx}"
+                tags = ()
+            self.tree.insert('', 'end', iid=str(idx), tags=tags, values=(
+                mail['trade_id'],
+                mail['subject'][:30] + "..." if len(mail['subject']) > 30 else mail['subject'],
+                mail['sender'][:20] + "..." if len(mail['sender']) > 20 else mail['sender'],
+                mail['recipient'][:20] + "..." if len(mail['recipient']) > 20 else mail['recipient'],
+                mail['date'],
+                email_type
+            ))
+            idx += 1
+
+    found_trade_ids = set(mail['trade_id'] for mail in all_emails)
+    self.unfound_trades = [
+        tid for tid in [tid.strip() for tid in re.split(",|\\s", self.trade_ids_var.get().strip()) if tid.strip()] 
+        if tid not in found_trade_ids
+    ]
+    logger.info(f"{self.unfound_trades} - Not Found In Email")
+    
+    for tid in self.unfound_trades:
+        filename = f"{tid}_email_entities_export_{datetime.now().strftime('%m_%d_%Y')}.csv"
+        out_file = os.path.join(self.temp_path, filename)
+        df.to_csv(out_file, index=False)
+
+    messagebox.showinfo(
+        "Success", 
+        f"Loaded {len(all_emails)} emails across {len(found_trade_ids)} Trade IDs."
+    )
+
+
+
+
+
+
+
+
 emails_by_trade[trade_id].sort(
     key=lambda x: datetime.strptime(x['date'], "%Y-%m-%d %H:%M:%S") if x['date'] else datetime.min
 )
