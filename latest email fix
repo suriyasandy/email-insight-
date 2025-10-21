@@ -1,3 +1,26 @@
+def on_email_select(self, event):
+    selection = self.tree.selection()
+    if not selection:
+        return
+    email_index = int(selection[0])
+    self.current_email_index = email_index
+
+    if 0 <= email_index < len(self.displayed_emails):
+        email_data = self.displayed_emails[email_index]
+        content = f"Trade ID: {email_data['trade_id']}\n"
+        content += f"From: {email_data['sender']}\n"
+        content += f"To: {email_data['recipient']}\n"
+        content += f"Date: {email_data['date']}\n"
+        content += f"Subject: {email_data['subject']}\n"
+        content += "-" * 50 + "\n"
+        content += email_data['body']
+        self.content_text.delete(1.0, tk.END)
+        self.content_text.insert(1.0, content)
+        self.entity_result_text.delete(1.0, tk.END)
+
+
+
+
 def finish_extraction(self, all_emails, error):
     """Handle extraction completion - show all emails with latest highlighted (newest first per trade)"""
     self.progress.stop()
