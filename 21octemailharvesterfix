@@ -108,3 +108,117 @@ def extract_email_chain_from_outlook(self):
             pythoncom.CoUninitialize()
 
     threading.Thread(target=worker, daemon=True).start()
+
+
+
+#activity type
+def extract_entities(self):
+    """Extract entities with activity type tracking"""
+    if self.selected_email is None:
+        messagebox.showwarning("No Selection", "Please select an email from the chain first")
+        return
+    
+    try:
+        entity_json = self.entity_text.get(1.0, tk.END).strip()
+        self.entity_definitions = json.loads(entity_json)
+    except Exception as e:
+        messagebox.showerror("Error", f"Invalid JSON format: {str(e)}")
+        return
+
+    email_data = self.selected_email
+    entities = {}
+
+    # Define activity type keywords (add more as needed)
+    activity_keywords = [
+        "NEW TRADE", "RESTRUCTURE", "UNWIND", "TERMINATION", 
+        "AMENDMENT", "NOVATION", "ASSIGNMENT", "EXERCISE"
+    ]
+
+    email_lines = email_data['body'].splitlines()
+    email_lines = list(filter(None, email_lines))  # Remove completely empty strings
+    
+    current_activity = None  # Track current activity type
+    
+    for line in email_lines:
+        line = line.strip()
+        
+        # Skip empty lines but retain activity context
+        if not line:
+            continue
+            
+        # Check if line contains an activity type keyword
+        line_upper = line.upper()
+        for keyword in activity_keywords:
+            if keyword in line_upper:
+                current_activity = keyword
+                logger.info(f"Activity type changed to: {current_activity}")
+                break
+        
+        # Process entity definitions
+        for entity_def in self.entity_definitions.get("entities", []):
+            entity_name = entity_def.get("name", "")
+            entity_type = entity_def.get("type", "")
+            
+            if entity_type == "pattern":
+                patterns = entity_def.get("patterns", [])
+                if entity_name == "PackageDetails":
+                    # Special handling to extract named groups from full line pattern
+                    for pattern in patterns:
+                        try:
+                            if self.attribute_count_check(pattern, line):
+                                regex = re.compile(pattern, re.IGNORECASE)
+                                matches = regex.finditer(line)
+                                for match in matches:
+                                    groupdict = match.groupdict()
+                                    # Add activity type to extracted data
+                                    if current_activity:
+                                        groupdict['ActivityType'] = current_activity
+                                    for k, v in groupdict.items():
+                                        if v:
+                                            entities.setdefault(k, []).append(f"{v} (Body)")
+                        except Exception as e:
+                            logger.info(f"Error in PackageDetails pattern extraction: {e}")
+                else:
+                    # Standard pattern extraction
+                    subject_vals = self.extract_with_patterns(email_data['subject'], patterns)
+                    body_vals = self.extract_with_patterns(line, patterns)  # Process line by line
+                    all_vals = []
+                    for v in subject_vals:
+                        all_vals.append(f"{v} (Subject)")
+                    for v in body_vals:
+                        all_vals.append(f"{v} (Body)")
+                    if all_vals:
+                        entities[entity_name] = all_vals
+
+            elif entity_type == "gazetteer":
+                gazetteer_vals = entity_def.get("values", [])
+                subject_vals = self.extract_with_gazetteer(email_data['subject'], gazetteer_vals)
+                body_vals = self.extract_with_gazetteer(line, gazetteer_vals)
+                all_vals = []
+                for v in subject_vals:
+                    all_vals.append(f"{v} (Subject)")
+                for v in body_vals:
+                    all_vals.append(f"{v} (Body)")
+                if all_vals:
+                    entities[entity_name] = all_vals
+
+    self.entity_result_text.delete(1.0, tk.END)
+    if entities:
+        for entity_name, vals in entities.items():
+            self.entity_result_text.insert(tk.END, f"{entity_name}:\n")
+            for v in vals:
+                self.entity_result_text.insert(tk.END, f"  - {v}\n")
+            self.entity_result_text.insert(tk.END, "\n")
+    else:
+        self.entity_result_text.insert(tk.END, "No entities found in this email")
+
+
+def attribute_count_check(self, pattern, line):
+    """Validate that pattern's group count matches the line's token count"""
+    group_count = len(re.compile(pattern).groupindex)
+    text_count = len(line.split())
+    if text_count == group_count:
+        return 1
+    else:
+        return 0
+
