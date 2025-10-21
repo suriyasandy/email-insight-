@@ -1,0 +1,380 @@
+import tkinter as tk
+from tkinter import ttk, scrolledtext, messagebox
+import win32com.client
+import pythoncom
+import pandas as pd
+import os
+import re
+import gc
+import threading
+import locale
+import logging
+from datetime import datetime, timedelta
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class OutlookEmailHarvester:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Outlook Email Harvester")
+        self.root.geometry("1400x900")
+        self.root.resizable(True, True)
+
+        # Fixed mailbox and folder mapping
+        self.mailbox_folders = {
+            "HBEU-Rates-TA": ["Sent Items", "QTrack History 2025Q4"],
+            "EXOTICSTAG HBFR-DMTC": ["Sent Items", "QTrack History 2025Q4"],
+            "FO-EURO-RATES HBFR-DMTC": ["Sent Items", "QTrack History 2025Q4"],
+            "MODERIV-HSBCF HBFR-DMTC": ["Sent Items", "QTrack History 2025Q4"],
+            "GMO_DARR": ["Sent Items", "QTrack History 2025Q4"],
+            "HKFI Derv Flow": ["Sent Items", "QTrack History 2025Q4"]
+        }
+
+        self.emails = []
+        self.unfound_trades = []
+
+        style = ttk.Style()
+        style.theme_use('clam')
+
+        main_frame = ttk.Frame(root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(7, weight=1)
+
+        # Mailbox Selection
+        ttk.Label(main_frame, text="Select Mailbox:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.mailbox_combo_var = tk.StringVar()
+        self.mailbox_combo = ttk.Combobox(
+            main_frame, 
+            textvariable=self.mailbox_combo_var,
+            values=list(self.mailbox_folders.keys()), 
+            width=30,
+            state="readonly"
+        )
+        self.mailbox_combo.grid(row=0, column=1, sticky=tk.W, pady=5, padx=(3, 0))
+        self.mailbox_combo.bind("<<ComboboxSelected>>", self.on_mailbox_select)
+        if self.mailbox_folders:
+            self.mailbox_combo.current(0)
+
+        # Folder Selection
+        ttk.Label(main_frame, text="Select Outlook Folder:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.folder_var = tk.StringVar()
+        self.folder_combo = ttk.Combobox(
+            main_frame, 
+            textvariable=self.folder_var,
+            values=[], 
+            width=30,
+            state="readonly"
+        )
+        self.folder_combo.grid(row=1, column=1, sticky=tk.W, pady=5, padx=(3, 0))
+
+        # Trade ID Input
+        ttk.Label(main_frame, text="Trade IDs:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.trade_ids_var = tk.StringVar()
+        trade_id_entry = ttk.Entry(main_frame, textvariable=self.trade_ids_var, width=50)
+        trade_id_entry.grid(row=2, column=1, sticky=(tk.W, tk.E), pady=5, padx=(3, 0))
+
+        # Buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=3, column=0, columnspan=5, pady=10)
+        ttk.Button(button_frame, text="Extract from Outlook", command=self.extract_email_chain_from_outlook).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Export to CSV", command=self.export_to_csv).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Clear Results", command=self.clear_results).pack(side=tk.LEFT, padx=5)
+
+        # Progress Bar
+        self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
+        self.progress.grid(row=4, column=0, columnspan=5, sticky=(tk.W, tk.E), pady=5)
+
+        # Status Label
+        self.status_label = ttk.Label(main_frame, text="Ready")
+        self.status_label.grid(row=5, column=0, columnspan=5, sticky=tk.W)
+
+        # Email Chain Tree
+        ttk.Label(main_frame, text="Email Chain:").grid(row=6, column=0, sticky=tk.W, pady=5)
+        self.tree = ttk.Treeview(
+            main_frame, 
+            columns=('trade_id', 'Subject', 'From', 'To', 'Date', 'Email Type'), 
+            show='headings'
+        )
+        self.tree.heading('trade_id', text='Trade ID')
+        self.tree.heading('Subject', text='Subject')
+        self.tree.heading('From', text='From')
+        self.tree.heading('To', text='To')
+        self.tree.heading('Date', text='Date')
+        self.tree.heading('Email Type', text='Email Type')
+        self.tree.column('trade_id', width=80)
+        self.tree.column('Subject', width=200)
+        self.tree.column('From', width=120)
+        self.tree.column('To', width=120)
+        self.tree.column('Date', width=120)
+        self.tree.column('Email Type', width=80)
+        self.tree.grid(row=7, column=0, columnspan=5, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        
+        tree_scroll = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        tree_scroll.grid(row=7, column=5, sticky=(tk.N, tk.S))
+        self.tree.configure(yscrollcommand=tree_scroll.set)
+
+        # Email Content Display
+        ttk.Label(main_frame, text="Email Content:").grid(row=8, column=0, sticky=tk.W, pady=5)
+        self.content_text = scrolledtext.ScrolledText(main_frame, width=80, height=15)
+        self.content_text.grid(row=9, column=0, columnspan=5, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+
+        self.tree.bind('<<TreeviewSelect>>', self.on_email_select)
+
+        # Initialize folder combo with first mailbox
+        self.on_mailbox_select(None)
+
+    # ========== FOLDER LOADING ==========
+    def on_mailbox_select(self, event):
+        selected_mailbox = self.mailbox_combo_var.get()
+        if selected_mailbox in self.mailbox_folders:
+            folders = self.mailbox_folders[selected_mailbox]
+            self.folder_combo['values'] = folders
+            if folders:
+                self.folder_combo.current(0)
+            else:
+                self.folder_var.set('')
+
+    # ========== OUTLOOK CONNECTION ==========
+    def connect_to_outlook(self):
+        try:
+            mailbox_name = self.mailbox_combo_var.get()
+            folder_name = self.folder_var.get()
+            
+            outlook = win32com.client.Dispatch("Outlook.Application")
+            mapi = outlook.GetNamespace("MAPI")
+            
+            mailbox = None
+            for i in range(1, mapi.Folders.Count + 1):
+                m = mapi.Folders.Item(i)
+                if m.Name == mailbox_name:
+                    mailbox = m
+                    break
+            
+            if mailbox is None:
+                logger.info(f"Mailbox '{mailbox_name}' not found!")
+                return None
+            
+            folder = None
+            for j in range(1, mailbox.Folders.Count + 1):
+                f = mailbox.Folders.Item(j)
+                if f.Name == folder_name:
+                    folder = f
+                    break
+            
+            if folder is None:
+                logger.info(f"Folder '{folder_name}' not found in '{mailbox_name}'!")
+                return None
+            
+            return folder
+        except Exception as e:
+            logger.error(f"Failed to connect to Outlook: {e}")
+            return None
+
+    # ========== REGION/DATE HELPERS ==========
+    def get_region_datefmt_ampm(self):
+        region = locale.getdefaultlocale()[0] if locale.getdefaultlocale() else ''
+        region_datefmt = {
+            'en_US': ('%m/%d/%Y', True),
+            'en_GB': ('%d/%m/%Y', False),
+            'en_IN': ('%d-%m-%Y', False),
+            'fr_FR': ('%d/%m/%Y', False),
+            'de_DE': ('%d.%m.%Y', False),
+            'es_ES': ('%d/%m/%Y', False),
+            'en_UK': ('%d/%m/%Y', False),
+            'en_HK': ('%d/%m/%Y', True)
+        }
+        date_fmt, use_ampm = region_datefmt.get(region, ('%m/%d/%Y', True))
+        return date_fmt, use_ampm
+
+    def restrict_datetime_strings(self, date_dt, date_fmt, use_ampm):
+        if use_ampm:
+            am_marker = date_dt.replace(hour=1).strftime('%p')
+            pm_marker = date_dt.replace(hour=13).strftime('%p')
+            start_time = f"{date_dt.strftime(date_fmt)} 12:00:00 {am_marker}"
+            end_time = f"{date_dt.strftime(date_fmt)} 11:59:59 {pm_marker}"
+        else:
+            start_time = f"{date_dt.strftime(date_fmt)} 00:00:00"
+            end_time = f"{date_dt.strftime(date_fmt)} 23:59:59"
+        return start_time, end_time
+
+    # ========== SAFE ITEM HANDLING ==========
+    def safe_items_to_list(self, items):
+        try:
+            return list(items)
+        except Exception:
+            if items is None:
+                return []
+            try:
+                if getattr(items, "Subject", None) is not None:
+                    return [items]
+            except Exception:
+                pass
+            return []
+
+    def process_items_in_batches(self, items, batch_size=150):
+        items_list = self.safe_items_to_list(items)
+        if not items_list:
+            return []
+        all_data = []
+        for i in range(0, len(items_list), batch_size):
+            batch = items_list[i:i + batch_size]
+            for item in batch:
+                try:
+                    if getattr(item, "Class", None) == 43:
+                        all_data.append({"item": item})
+                except Exception as e:
+                    logger.warning(f"Error reading batch mail: {e}")
+                finally:
+                    del item
+            gc.collect()
+        return all_data
+
+    # ========== THREADED EXTRACTION ==========
+    def extract_email_chain_from_outlook(self):
+        trade_ids_str = self.trade_ids_var.get().strip()
+        if not trade_ids_str:
+            messagebox.showwarning("Input Error", "Please enter trade IDs")
+            return
+        
+        self.progress.start()
+        self.clear_results()
+        self.status_label.config(text="Extracting emails...")
+        
+        def worker():
+            pythoncom.CoInitialize()  # Initialize COM for this thread
+            try:
+                folder = self.connect_to_outlook()
+                if not folder:
+                    self.root.after(0, lambda: self.finish_extraction([], "Could not connect to folder"))
+                    return
+                
+                trade_ids = [tid.strip() for tid in re.split(",|\\s", trade_ids_str) if tid.strip()]
+                today = datetime.now()
+                days_back = 3
+                date_fmt, use_ampm = self.get_region_datefmt_ampm()
+                all_items = []
+
+                for days_ago in range(1, days_back + 1):
+                    d = today - timedelta(days=days_ago)
+                    start_time, end_time = self.restrict_datetime_strings(d, date_fmt, use_ampm)
+                    filter_str = f"[ReceivedTime] >= '{start_time}' AND [ReceivedTime] <= '{end_time}'"
+                    logger.info(f"Trying filter: {filter_str}")
+                    items = folder.Items.Restrict(filter_str)
+                    items_list = self.process_items_in_batches(items, batch_size=150)
+                    
+                    if not items_list and use_ampm:
+                        am_l = d.replace(hour=1).strftime('%p').lower()
+                        pm_l = d.replace(hour=13).strftime('%p').lower()
+                        start_time_l = f"{d.strftime(date_fmt)} 12:00:00 {am_l}"
+                        end_time_l = f"{d.strftime(date_fmt)} 11:59:59 {pm_l}"
+                        filter_str_l = f"[ReceivedTime] >= '{start_time_l}' AND [ReceivedTime] <= '{end_time_l}'"
+                        items = folder.Items.Restrict(filter_str_l)
+                        items_list = self.process_items_in_batches(items, batch_size=150)
+                    
+                    if items_list:
+                        all_items.extend([entry["item"] for entry in items_list])
+
+                emails = []
+                for trade_id in trade_ids:
+                    for item in all_items:
+                        try:
+                            if getattr(item, "Class", None) == 43:
+                                subject = item.Subject or ""
+                                body = item.Body or ""
+                                html_body = ""
+                                try:
+                                    html_body = item.HTMLBody
+                                except Exception:
+                                    pass
+                                if (trade_id in subject or trade_id in body or (html_body and trade_id in html_body)):
+                                    emails.append({
+                                        'trade_id': trade_id,
+                                        'subject': subject,
+                                        'sender': getattr(item, "SenderName", ""),
+                                        'recipient': getattr(item, "To", ""),
+                                        'date': item.ReceivedTime.strftime("%Y-%m-%d %H:%M:%S") if item.ReceivedTime else "",
+                                        'body': body,
+                                        'html_body': html_body,
+                                    })
+                        except Exception:
+                            pass
+
+                gc.collect()
+                self.root.after(0, lambda: self.finish_extraction(emails, None))
+            except Exception as e:
+                gc.collect()
+                self.root.after(0, lambda: self.finish_extraction([], str(e)))
+            finally:
+                pythoncom.CoUninitialize()  # Clean up COM
+        
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_extraction(self, emails, error):
+        self.progress.stop()
+        self.status_label.config(text="Ready")
+        if error:
+            messagebox.showerror("Extraction Error", f"Failed: {error}")
+        else:
+            self.emails = emails
+            for idx, mail in enumerate(emails):
+                email_type = "Original"
+                subj = mail['subject'].lower()
+                if "re:" in subj:
+                    email_type = f"Reply {idx}"
+                elif "fw:" in subj or "fwd:" in subj:
+                    email_type = f"Forward {idx}"
+                self.tree.insert('', 'end', iid=str(idx), values=(
+                    mail['trade_id'],
+                    mail['subject'][:30] + "..." if len(mail['subject']) > 30 else mail['subject'],
+                    mail['sender'][:20] + "..." if len(mail['sender']) > 20 else mail['sender'],
+                    mail['recipient'][:20] + "..." if len(mail['recipient']) > 20 else mail['recipient'],
+                    mail['date'],
+                    email_type
+                ))
+            messagebox.showinfo("Success", f"Loaded {len(emails)} emails")
+
+    def on_email_select(self, event):
+        selection = self.tree.selection()
+        if not selection:
+            return
+        email_index = int(selection[0])
+        if 0 <= email_index < len(self.emails):
+            email_data = self.emails[email_index]
+            content = f"Trade ID: {email_data['trade_id']}\n"
+            content += f"From: {email_data['sender']}\n"
+            content += f"To: {email_data['recipient']}\n"
+            content += f"Date: {email_data['date']}\n"
+            content += f"Subject: {email_data['subject']}\n"
+            content += "-" * 50 + "\n"
+            content += email_data['body']
+            self.content_text.delete(1.0, tk.END)
+            self.content_text.insert(1.0, content)
+
+    def export_to_csv(self):
+        if not self.emails:
+            messagebox.showwarning("No Data", "No emails to export")
+            return
+        try:
+            df = pd.DataFrame(self.emails)
+            today = datetime.now()
+            filename = f"email_export_{today.strftime('%Y%m%d_%H%M%S')}.csv"
+            df.to_csv(filename, index=False)
+            messagebox.showinfo("Success", f"Data exported to {filename}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export: {str(e)}")
+
+    def clear_results(self):
+        self.tree.delete(*self.tree.get_children())
+        self.content_text.delete(1.0, tk.END)
+        self.emails = []
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = OutlookEmailHarvester(root)
+    root.mainloop()
