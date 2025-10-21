@@ -1,3 +1,11 @@
+emails_by_trade[trade_id].sort(
+    key=lambda x: datetime.strptime(x['date'], "%Y-%m-%d %H:%M:%S") if x['date'] else datetime.min
+)
+
+
+
+
+
 idx = 0
 
 for trade_id in sorted(emails_by_trade.keys()):
