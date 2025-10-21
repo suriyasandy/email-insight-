@@ -1,3 +1,66 @@
+def finish_extraction(self, all_emails, error):
+    """Handle extraction completion on main thread with per-trade-ID email chain logic"""
+    self.progress.stop()
+    if error:
+        messagebox.showerror("Extraction Error", f"Failed to extract emails: {error}")
+    else:
+        df = pd.DataFrame(columns=self.selected_columns)
+        
+        # Group emails by trade_id and sort by date within each group
+        from collections import defaultdict
+        from dateutil import parser
+        
+        emails_by_trade = defaultdict(list)
+        for mail in all_emails:
+            emails_by_trade[mail['trade_id']].append(mail)
+        
+        # Sort each trade's emails by date (oldest first)
+        for trade_id in emails_by_trade:
+            emails_by_trade[trade_id].sort(
+                key=lambda x: parser.parse(x['date']) if x['date'] else datetime.min
+            )
+        
+        # Populate tree with proper email type labeling per trade_id
+        idx = 0
+        for trade_id in sorted(emails_by_trade.keys()):
+            trade_emails = emails_by_trade[trade_id]
+            for email_idx, mail in enumerate(trade_emails):
+                # Determine email type based on position in THIS trade's chain
+                if email_idx == 0:
+                    email_type = "Original"
+                else:
+                    subj = mail['subject'].lower()
+                    if "re:" in subj:
+                        email_type = f"Reply {email_idx}"
+                    elif "fw:" in subj or "fwd:" in subj:
+                        email_type = f"Forward {email_idx}"
+                    else:
+                        email_type = f"Email {email_idx}"
+                
+                self.tree.insert('', 'end', iid=str(idx), values=(
+                    mail['trade_id'],
+                    mail['subject'][:30] + "..." if len(mail['subject']) > 30 else mail['subject'],
+                    mail['sender'][:20] + "..." if len(mail['sender']) > 20 else mail['sender'],
+                    mail['recipient'][:20] + "..." if len(mail['recipient']) > 20 else mail['recipient'],
+                    mail['date'],
+                    email_type
+                ))
+                idx += 1
+        
+        found_trade_ids = set(mail['trade_id'] for mail in all_emails)
+        self.unfound_trades = [tid for tid in [tid.strip() for tid in re.split(",|\\s", self.trade_ids_var.get().strip()) if tid.strip()] if tid not in found_trade_ids]
+        logger.info(f"{self.unfound_trades} - Not Found In Email")
+        for tid in self.unfound_trades:
+            filename = f"{tid}_email_entities_export_{datetime.now().strftime('%m_%d_%Y')}.csv"
+            out_file = os.path.join(self.temp_path, filename)
+            df.to_csv(out_file, index=False)
+        
+        messagebox.showinfo("Success", f"Loaded {len(all_emails)} emails across {len(found_trade_ids)} Trade IDs.")
+
+
+
+-------------
+
 import pandas as pd
 import os
 
