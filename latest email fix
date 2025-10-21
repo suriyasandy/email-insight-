@@ -1,3 +1,95 @@
+import glob
+import os
+import pandas as pd
+import csv
+from datetime import datetime
+from filelock import FileLock
+
+def export_consolidated_results(self):
+    """
+    Export consolidated results by appending all unique temp trade CSVs 
+    to a single Excel file, robust for multiple simultaneous app runs.
+    """
+    try:
+        temp_df = None
+        today = datetime.now()
+        today_str = today.strftime("%m_%d_%Y")
+        csv_files = glob.glob(f"{self.temp_path}/*.csv")
+        sheet_name = "Consolidated Report"
+        consolidated_file = f"{self.out_path}/{today_str}_{sheet_name}.xlsx"
+        lock_path = consolidated_file + '.lock'
+        ws_rows = []
+        
+        # Use a lock so only one process writes at a time
+        with FileLock(lock_path, timeout=60):
+            for file in csv_files:
+                base_name = os.path.basename(file)
+                trade_id = base_name.split("_")[0]
+                rows_found = False
+                with open(file, newline="", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    csv_headers = list(reader.fieldnames) if reader.fieldnames else []
+                    expected_headers = self.static_headers[1:]
+                    required_sub_headers = self.static_headers[16:]
+                    
+                    # Only process files not already present in master file (avoid duplicates)
+                    # Optionally: use a flag file, or store processed files in a 'PROCESSED' subdir
+                    if all(header in csv_headers for header in required_sub_headers):
+                        for row in reader:
+                            out_row = [trade_id]
+                            for header in expected_headers:
+                                out_row.append(row.get(header, ""))
+                            ws_rows.append(out_row)
+                            rows_found = True
+                    elif any(h in csv_headers for h in expected_headers):
+                        for row in reader:
+                            out_row = [trade_id]
+                            for header in expected_headers:
+                                out_row.append(row.get(header, ""))
+                            ws_rows.append(out_row)
+                            rows_found = True
+                    else:
+                        # Write a row for empty or header-mismatch files
+                        if len(csv_headers) == 0:
+                            out_row = [trade_id, "Not Found In Mail - No Entity Found"] + [""] * (len(self.static_headers) - 2)
+                        else:
+                            out_row = [trade_id, "Partial header mismatch - Check file: {base_name}"] + [""] * (len(self.static_headers) - 2)
+                        ws_rows.append(out_row)
+                        rows_found = True
+                # Remove the CSV after processing so it isn't processed twice
+                os.remove(file)
+
+            # Build dataframe for all combined results
+            df_new = pd.DataFrame(ws_rows, columns=self.static_headers)
+            
+            # Append to existing or create new Excel
+            if os.path.isfile(consolidated_file):
+                df_existing = pd.read_excel(consolidated_file)
+                df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+                df_combined.to_excel(consolidated_file, index=False)
+            else:
+                df_new.to_excel(consolidated_file, index=False)
+            
+            # Optionally display summary, e.g. in Tkinter widget
+            temp_df = pd.read_excel(consolidated_file)
+            if not temp_df.empty:
+                self.entity_result_text.delete(1.0, tk.END)
+                self.entity_result_text.insert(tk.END, f"{temp_df}\n")
+            else:
+                self.entity_result_text.insert(tk.END, "No Data found in this email")
+
+        logger.info("Success - Consolidated Report File Generated")
+        messagebox.showinfo("Success", f"Consolidated Report File Generated: {self.out_path}")
+    except Exception as e:
+        logger.info(f"Export Error Failed to export : {e}")
+        messagebox.showerror("Export Error", f"Failed to export : {e}")
+
+
+
+
+
+
+
 from collections import defaultdict
 from dateutil import parser
 from datetime import datetime
