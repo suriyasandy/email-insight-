@@ -1,0 +1,47 @@
+Here is the mail content as plain text for easy copy-paste:
+
+***
+
+Subject: Update: Mail Extraction BOT – Activity Type Added, Sample Output Attached, Request for Testing
+
+Hi All,
+
+Please find the latest updates regarding the Mail Extraction BOT:
+
+1. Outlook Restriction:
+   The earlier issue related to Outlook restrictions has been fully handled. We have also enhanced the logic to filter and process mails more efficiently, matching as per trade IDs.
+
+2. Activity Type Feature:
+   The BOT now supports activity type extraction. Activity type detection is configured and mapped for each trade package, as requested by the business for BAU. This ensures all relevant activity categorizations are available in the output.
+
+3. Sample Output:
+   Please find attached a sample output file generated using the latest system. This file demonstrates the results, including activity type information for each processed email.
+
+4. Request for Testing:
+   - We request end users to run the BOT using your own scenarios and review the outputs, especially for the new activity type capability.
+   - Please check if all expected keywords, data fields, and activity types are present and accurate.
+   - Any new email patterns, keyword requirements, or missed cases may be shared with us for further configuration/update.
+
+5. Performance:
+   The system can now handle large mail volumes (beyond 500+ mails per run). Additional enhancements are ongoing to further optimize extraction speed.
+
+If you have any feedback, issues, or suggestions, please share them along with sample emails/output wherever possible, so we can continue improving the solution.
+
+Thanks & Regards,
+[Your Name/Team]
+
+***
+
+**(Attach the sample output file with your mail.)**
+
+Sources
+[1] Free HTML Email Templates https://beefree.io/templates
+[2] Free and customizable email templates https://www.canva.com/templates/s/email/
+[3] 5 Copy & Paste Email Templates Any Business Can Use https://www.wordstream.com/blog/ws/2022/03/30/business-email-templates
+[4] Create an email message template https://support.microsoft.com/en-us/office/create-an-email-message-template-43ec7142-4dd0-4351-8727-bd0977b6b2d1
+[5] 5 great official email templates to copy & paste https://flodesk.com/tips/official-email-templates
+[6] Free Plain Text Email Template https://www.litmus.com/email-templates/plain-text
+[7] Free HTML email templates https://tabular.email/templates
+[8] 1600+ Free HTML Email Templates & Newsletters https://stripo.email/templates/
+[9] 34 customer service email templates + best practices https://www.zendesk.com/blog/use-customer-service-email-templates-save-time/
+[10] Free email signature templates for download https://www.mail-signatures.com/signature-templates/
