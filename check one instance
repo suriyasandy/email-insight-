@@ -1,0 +1,67 @@
+import os
+import sys
+import tkinter as tk
+from datetime import datetime
+from filelock import FileLock, Timeout
+
+def fetchfile():
+    logger.info(f"Mail Harvester Bot triggered - User:{os.getlogin()}")
+    
+    today = datetime.today()
+    dir_path = os.path.join(
+        "T:",
+        str(today.year),
+        str(today.month).zfill(2),
+        str(today.day).zfill(2),
+        os.getlogin()
+    )
+    os.makedirs(dir_path, exist_ok=True)
+    logger.info(f"Output Directory : {dir_path}")
+    
+    temp_path = os.path.join(
+        os.getcwd(),
+        "Results",
+        str(today.year),
+        str(today.month).zfill(2),
+        str(today.day).zfill(2),
+    )
+    os.makedirs(temp_path, exist_ok=True)
+    logger.info(f"Output Directory : {temp_path}")
+    
+    # Single-instance lock mechanism
+    lock_file_path = os.path.join(temp_path, "mail_harvester.lock")
+    lock = FileLock(lock_file_path, timeout=0)
+    
+    try:
+        # Try to acquire the lock (non-blocking)
+        lock.acquire(timeout=0)
+        logger.info("No other instance running. Launching GUI...")
+        
+        # Launch the Tkinter GUI
+        root = tk.Tk()
+        app = EmailEntityExtractor(root, dir_path, temp_path)
+        root.mainloop()
+        
+        logger.info(f"Mail Harvester Bot Run Completed - User:{os.getlogin()}")
+        
+    except Timeout:
+        # Another instance is already running
+        logger.warning("Another instance of Mail Harvester is already running. Exiting...")
+        print("Mail Harvester is already running. Please close the existing instance first.")
+        sys.exit(0)
+    
+    finally:
+        # Release lock and clean up when GUI closes
+        try:
+            lock.release()
+        except:
+            pass
+        
+        # Clean up temp files
+        for file in os.listdir(temp_path):
+            file_path = os.path.join(temp_path, file)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+        
+        # Delete temp directory if exists
+        delete_dir_if_exists(temp_path)
