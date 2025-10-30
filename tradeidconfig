@@ -1,0 +1,5 @@
+{
+  "trade_id_basic": "(?P<TradeID>\\d{7}[A-Za-z0-9]+)",
+  "trade_id_with_suffix": "(?P<TradeID>\\d{7}[A-Za-z0-9]+/[A-Za-z0-9]+)",
+  "trade_id_optional_suffix": "(?P<TradeID>\\d{7}[A-Za-z0-9]+(?:/[A-Za-z0-9]+)?)"
+}
